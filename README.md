@@ -4,6 +4,8 @@ Simple terminal dashboard for monitoring a Bambu Lab printer over MQTT on your l
 
 This project connects directly to the printer, requests a full status snapshot, and keeps refreshing the dashboard with live print telemetry such as progress, layer counts, temperatures, fan speeds, WiFi signal, and the current file name.
 
+![Bambu Cloud Monitor Dashboard](https://raw.githubusercontent.com/jsammarco/Bambu-Cloud-Monitor/refs/heads/main/Images/Screenshot.JPG)
+
 ## Features
 
 - Live terminal dashboard
