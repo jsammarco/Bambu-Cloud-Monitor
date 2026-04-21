@@ -1,0 +1,24 @@
+App(
+    appid="bambu_fleet",
+    name="Bambu Fleet",
+    apptype=FlipperAppType.EXTERNAL,
+    entry_point="bambu_monitor_app",
+    stack_size=8 * 1024,
+    fap_version="0.1",
+    fap_category="Tools",
+    fap_description="ESP32-backed Bambu printer fleet monitor scaffold",
+    fap_author="OpenAI Codex",
+    sources=[
+        "app_ui.c",
+        "bambu_monitor_app.c",
+        "bambu_transport_live.c",
+    ],
+    requires=[
+        "gui",
+        "dialogs",
+        "notification",
+    ],
+    targets=[
+        "f7",
+    ],
+)
