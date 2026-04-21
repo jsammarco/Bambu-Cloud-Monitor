@@ -1,8 +1,8 @@
-# Bambu Cloud Monitor
+# Bambu Cloud Monitor & BambuFleet Flipper App
 
 Tools for monitoring Bambu Lab printers from either a desktop terminal or a Flipper Zero + ESP32 bridge.
 
-The main desktop workflow uses `monitor_all.py` to discover printers tied to a bearer token, resolve local IPs, cache the result in `found_printers.json`, and display a live fleet dashboard. The Flipper workflow uses the app in [`FlipperApp`](C:\Users\Joe\Projects\Bambu-Cloud-Monitor\FlipperApp) to load a cached printer list from SD, talk to an ESP32 over UART, and request local MQTT status for a selected printer.
+You only need a bearer token to discover your printers and view the printer settings needed by the desktop and Flipper workflows. The desktop tools use `query.py`, `monitor.py`, and `monitor_all.py` to retrieve printers from the token, resolve local IPs, cache the result in `found_printers.json`, and display single-printer or fleet dashboards over local MQTT. The Flipper workflow uses the app in [`FlipperApp`](C:\Users\Joe\Projects\Bambu-Cloud-Monitor\FlipperApp) with an ESP32 bridge to connect to Wi‑Fi, load a token and cached printer list from SD, browse printers on-device, and request local MQTT status for a selected printer from the handheld UI.
 
 `monitor.py` remains the single-printer desktop option when you already know one printer's IP, serial, and access code.
 
@@ -10,9 +10,10 @@ The main desktop workflow uses `monitor_all.py` to discover printers tied to a b
 
 ![Bambu Cloud Monitor Dashboard](https://raw.githubusercontent.com/jsammarco/Bambu-Cloud-Monitor/refs/heads/main/Images/Screenshot.JPG)
 
-![Bambu Fleet Flipper Main Menu](https://raw.githubusercontent.com/jsammarco/Bambu-Cloud-Monitor/refs/heads/main/Images/FlipperMainMenu.png)
-
-![Bambu Fleet Flipper Printer Details](https://raw.githubusercontent.com/jsammarco/Bambu-Cloud-Monitor/refs/heads/main/Images/FlipperPrinterDetails.png)
+| Flipper App | Flipper App |
+| --- | --- |
+| ![Bambu Fleet Flipper Main Menu](https://raw.githubusercontent.com/jsammarco/Bambu-Cloud-Monitor/refs/heads/main/Images/FlipperMainMenu.png) | ![Bambu Fleet Flipper Printer List](https://raw.githubusercontent.com/jsammarco/Bambu-Cloud-Monitor/refs/heads/main/Images/FlipperPrinterList.png) |
+| ![Bambu Fleet Flipper Printer Details](https://raw.githubusercontent.com/jsammarco/Bambu-Cloud-Monitor/refs/heads/main/Images/FlipperPrinterDetails.png) | ![Bambu Fleet Flipper Printer Details Alternate](https://raw.githubusercontent.com/jsammarco/Bambu-Cloud-Monitor/refs/heads/main/Images/FlipperPrinterDetails2.png) |
 
 ## Features
 

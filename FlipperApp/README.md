@@ -2,13 +2,11 @@
 
 Flipper Zero companion app and ESP32 bridge for viewing Bambu printer status from the Flipper.
 
-![Bambu Fleet Flipper Main Menu](https://raw.githubusercontent.com/jsammarco/Bambu-Cloud-Monitor/refs/heads/main/Images/FlipperMainMenu.png)
-
-![Bambu Fleet Flipper Printer List](https://raw.githubusercontent.com/jsammarco/Bambu-Cloud-Monitor/refs/heads/main/Images/FlipperPrinterList.png)
-
-![Bambu Fleet Flipper Printer Details](https://raw.githubusercontent.com/jsammarco/Bambu-Cloud-Monitor/refs/heads/main/Images/FlipperPrinterDetails.png)
-
-![Bambu Fleet Flipper Refresh](https://raw.githubusercontent.com/jsammarco/Bambu-Cloud-Monitor/refs/heads/main/Images/FlipperPrinterRefresh.png)
+| Flipper App | Flipper App |
+| --- | --- |
+| ![Bambu Fleet Flipper Main Menu](https://raw.githubusercontent.com/jsammarco/Bambu-Cloud-Monitor/refs/heads/main/Images/FlipperMainMenu.png) | ![Bambu Fleet Flipper Printer List](https://raw.githubusercontent.com/jsammarco/Bambu-Cloud-Monitor/refs/heads/main/Images/FlipperPrinterList.png) |
+| ![Bambu Fleet Flipper Printer Details](https://raw.githubusercontent.com/jsammarco/Bambu-Cloud-Monitor/refs/heads/main/Images/FlipperPrinterDetails.png) | ![Bambu Fleet Flipper Printer Details Alternate](https://raw.githubusercontent.com/jsammarco/Bambu-Cloud-Monitor/refs/heads/main/Images/FlipperPrinterDetails2.png) |
+| ![Bambu Fleet Flipper Refresh](https://raw.githubusercontent.com/jsammarco/Bambu-Cloud-Monitor/refs/heads/main/Images/FlipperPrinterRefresh.png) |  |
 
 ## Current Status
 
