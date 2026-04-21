@@ -6,6 +6,8 @@ This project connects directly to the printer, requests a full status snapshot, 
 
 ![Bambu Cloud Monitor Dashboard](https://raw.githubusercontent.com/jsammarco/Bambu-Cloud-Monitor/refs/heads/main/Images/Screenshot.JPG)
 
+It also includes a multi-printer mode that can discover every printer on your account, cache the results, and show all active jobs in one console dashboard.
+
 ## Features
 
 - Live terminal dashboard
@@ -14,6 +16,7 @@ This project connects directly to the printer, requests a full status snapshot, 
 - Fan speed and WiFi signal display
 - Automatic refresh requests every 5 seconds
 - Helper scripts to retrieve a bearer token and list printer metadata
+- Multi-printer dashboard with cached discovery
 - Local configuration through `.env`
 
 ## Requirements
@@ -25,10 +28,10 @@ This project connects directly to the printer, requests a full status snapshot, 
 
 ## Setup
 
-1. Install the dependency:
+1. Install the dependencies:
 
 ```bash
-pip install paho-mqtt
+pip install -r requirements.txt
 ```
 
 2. Copy the sample config:
@@ -169,6 +172,35 @@ The script will:
 - publish a `pushall` request to `device/<serial>/request`
 - redraw the dashboard whenever new status data arrives
 
+## Monitor All Printers
+
+Use `monitor_all.py` to discover all printers tied to your bearer token, cache the results, and open one combined dashboard for every resolved device.
+
+First run with rediscovery:
+
+```bash
+python monitor_all.py [BEARER_TOKEN] --rediscover --subnet 192.168.50.0/24
+```
+
+Later runs can reuse the cached discovery file:
+
+```bash
+python monitor_all.py [BEARER_TOKEN]
+```
+
+To force a refresh of `found_printers.json`, pass `--rediscover` again.
+
+Useful flags:
+
+- `--rediscover`: rebuild the printer cache
+- `--subnet 192.168.50.0/24`: narrow the discovery scan
+- `--debug-ip`: print detailed discovery logs instead of progress bars
+- `--cache-file custom_found_printers.json`: use a different cache file
+
+`monitor_all.py` stores discovery results in `found_printers.json` so restarting the app does not require a fresh scan every time.
+
+![Bambu Cloud Monitor All Printers Dashboard](https://raw.githubusercontent.com/jsammarco/Bambu-Cloud-Monitor/refs/heads/main/Images/MonitorAll%20Screenshot.JPG)
+
 ## Environment Variables
 
 The project reads configuration from `.env` or your process environment:
@@ -183,8 +215,11 @@ If any of these are missing, `monitor.py` raises a startup error explaining how 
 
 - [`login.py`](C:\Users\Joe\Projects\Bambu-Cloud-Monitor\login.py): gets a bearer token through the Bambu authentication flow
 - [`monitor.py`](C:\Users\Joe\Projects\Bambu-Cloud-Monitor\monitor.py): the main MQTT dashboard script
+- [`monitor_all.py`](C:\Users\Joe\Projects\Bambu-Cloud-Monitor\monitor_all.py): discovers, caches, and monitors all printers in one dashboard
 - [`query.py`](C:\Users\Joe\Projects\Bambu-Cloud-Monitor\query.py): lists printers, shows serial numbers and access codes, and can attempt local IP discovery
+- [`requirements.txt`](C:\Users\Joe\Projects\Bambu-Cloud-Monitor\requirements.txt): Python dependencies for the project
 - [`sample.env`](C:\Users\Joe\Projects\Bambu-Cloud-Monitor\sample.env): example environment file
+- [`Images/MonitorAll Screenshot.JPG`](<C:\Users\Joe\Projects\Bambu-Cloud-Monitor\Images\MonitorAll Screenshot.JPG>): multi-printer dashboard screenshot
 - [`Images/Screenshot.JPG`](C:\Users\Joe\Projects\Bambu-Cloud-Monitor\Images\Screenshot.JPG): example dashboard screenshot
 
 ## Research Notes
