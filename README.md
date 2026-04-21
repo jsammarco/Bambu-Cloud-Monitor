@@ -13,6 +13,7 @@ This project connects directly to the printer, requests a full status snapshot, 
 - Nozzle and bed temperature monitoring
 - Fan speed and WiFi signal display
 - Automatic refresh requests every 5 seconds
+- Helper scripts to retrieve a bearer token and list printer metadata
 - Local configuration through `.env`
 
 ## Requirements
@@ -44,6 +45,115 @@ SERIAL=YOUR_PRINTER_SERIAL
 ACCESS_CODE=YOUR_ACCESS_CODE
 ```
 
+## Get Your Token And Printer Details
+
+If you do not already have the values needed for `.env`, use the helper scripts in this repository.
+
+### 1. Get a bearer token
+
+Run:
+
+```bash
+python login.py
+```
+
+`login.py` authenticates with Bambu Lab and obtains a bearer token. It can also save the token locally, depending on how your local `bambulab` library is configured.
+
+### 2. Query your printers
+
+Run:
+
+```bash
+python query.py [BEARER_TOKEN]
+```
+
+This queries the Bambu Cloud API and lists the printers on your account. The current script outputs:
+
+- printer name
+- serial number
+- model information
+- access code
+- online state
+- print status
+
+The two values most useful for `monitor.py` are:
+
+- `Serial Number` -> `SERIAL`
+- `Access Code` -> `ACCESS_CODE`
+
+### 3. Get the printer IP
+
+`query.py` now includes a best-effort local IP discovery mode. It scans your local subnet for hosts with port `8883` open, then tries the same local MQTT authentication used by `monitor.py` to match each printer's access code.
+
+Run:
+
+```bash
+python query.py [BEARER_TOKEN] --resolve-ip
+```
+
+If you want to limit the scan to a known subnet, use:
+
+```bash
+python query.py [BEARER_TOKEN] --resolve-ip --subnet 192.168.50.0/24
+```
+
+For step-by-step discovery logs, add `--debug-ip`:
+
+```bash
+python query.py [BEARER_TOKEN] --resolve-ip --debug-ip --subnet 192.168.50.0/24
+```
+
+When discovery succeeds, `query.py` will print a `Local IP` line for each device.
+
+Example output:
+
+```text
+================================================================================
+Bambu Lab Printer Information Query
+================================================================================
+
+Fetching device list...
+Scanning 254 host(s) for port 8883...
+MQTT candidate host(s): 192.168.50.27, 192.168.50.162, 192.168.50.165
+Resolving local IP for Example Printer (01XXXXXXXXXXXXX)...
+  Trying 3 candidate host(s) for Example Printer...
+    Testing 192.168.50.27...
+    No match at 192.168.50.27
+    Testing 192.168.50.162...
+    Matched Example Printer -> 192.168.50.162
+
+Found 1 device(s):
+
+================================================================================
+Device: Example Printer
+================================================================================
+  Serial Number:  01XXXXXXXXXXXXX
+  Model:          P1S (C12)
+  Structure:      CoreXY
+  Nozzle Size:    0.4mm
+  Access Code:    ********
+  Online:         Yes
+  Print Status:   RUNNING
+  Local IP:       192.168.50.162
+================================================================================
+```
+
+This is still best-effort. If the printer is on another VLAN, asleep, blocked by firewall rules, or your network is not a `/24`, auto-discovery may miss it.
+
+Common ways to find it:
+
+- check your router or DHCP client list
+- check the printer's network settings from the device itself
+- use your router app or web interface to match the printer by hostname or MAC address
+
+Once you have the IP, place it in:
+
+```env
+PRINTER_IP=192.168.50.162
+```
+
+Then combine the IP with the serial number and access code returned by `query.py`.
+
 ## Usage
 
 Run the monitor with:
@@ -71,7 +181,9 @@ If any of these are missing, `monitor.py` raises a startup error explaining how 
 
 ## Project Files
 
+- [`login.py`](C:\Users\Joe\Projects\Bambu-Cloud-Monitor\login.py): gets a bearer token through the Bambu authentication flow
 - [`monitor.py`](C:\Users\Joe\Projects\Bambu-Cloud-Monitor\monitor.py): the main MQTT dashboard script
+- [`query.py`](C:\Users\Joe\Projects\Bambu-Cloud-Monitor\query.py): lists printers, shows serial numbers and access codes, and can attempt local IP discovery
 - [`sample.env`](C:\Users\Joe\Projects\Bambu-Cloud-Monitor\sample.env): example environment file
 - [`Images/Screenshot.JPG`](C:\Users\Joe\Projects\Bambu-Cloud-Monitor\Images\Screenshot.JPG): example dashboard screenshot
 
