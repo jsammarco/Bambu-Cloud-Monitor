@@ -6,6 +6,8 @@ This project connects directly to the printer, requests a full status snapshot, 
 
 ![Bambu Cloud Monitor Dashboard](https://raw.githubusercontent.com/jsammarco/Bambu-Cloud-Monitor/refs/heads/main/Images/Screenshot.JPG)
 
+![Bambu Cloud Monitor All Printers Dashboard](https://raw.githubusercontent.com/jsammarco/Bambu-Cloud-Monitor/refs/heads/main/Images/MonitorAll%20Screenshot.JPG)
+
 It also includes a multi-printer mode that can discover every printer on your account, cache the results, and show all active jobs in one console dashboard.
 
 ## Features
@@ -198,8 +200,6 @@ Useful flags:
 - `--cache-file custom_found_printers.json`: use a different cache file
 
 `monitor_all.py` stores discovery results in `found_printers.json` so restarting the app does not require a fresh scan every time.
-
-![Bambu Cloud Monitor All Printers Dashboard](https://raw.githubusercontent.com/jsammarco/Bambu-Cloud-Monitor/refs/heads/main/Images/MonitorAll%20Screenshot.JPG)
 
 ## Environment Variables
 
