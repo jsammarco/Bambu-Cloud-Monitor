@@ -10,6 +10,10 @@ The main desktop workflow uses `monitor_all.py` to discover printers tied to a b
 
 ![Bambu Cloud Monitor Dashboard](https://raw.githubusercontent.com/jsammarco/Bambu-Cloud-Monitor/refs/heads/main/Images/Screenshot.JPG)
 
+![Bambu Fleet Flipper Main Menu](https://raw.githubusercontent.com/jsammarco/Bambu-Cloud-Monitor/refs/heads/main/Images/FlipperMainMenu.png)
+
+![Bambu Fleet Flipper Printer Details](https://raw.githubusercontent.com/jsammarco/Bambu-Cloud-Monitor/refs/heads/main/Images/FlipperPrinterDetails.png)
+
 ## Features
 
 - Single-printer terminal dashboard with live MQTT telemetry

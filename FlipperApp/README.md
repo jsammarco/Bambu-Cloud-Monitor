@@ -2,6 +2,14 @@
 
 Flipper Zero companion app and ESP32 bridge for viewing Bambu printer status from the Flipper.
 
+![Bambu Fleet Flipper Main Menu](https://raw.githubusercontent.com/jsammarco/Bambu-Cloud-Monitor/refs/heads/main/Images/FlipperMainMenu.png)
+
+![Bambu Fleet Flipper Printer List](https://raw.githubusercontent.com/jsammarco/Bambu-Cloud-Monitor/refs/heads/main/Images/FlipperPrinterList.png)
+
+![Bambu Fleet Flipper Printer Details](https://raw.githubusercontent.com/jsammarco/Bambu-Cloud-Monitor/refs/heads/main/Images/FlipperPrinterDetails.png)
+
+![Bambu Fleet Flipper Refresh](https://raw.githubusercontent.com/jsammarco/Bambu-Cloud-Monitor/refs/heads/main/Images/FlipperPrinterRefresh.png)
+
 ## Current Status
 
 This project is functional as a development build, not a finished production app.
