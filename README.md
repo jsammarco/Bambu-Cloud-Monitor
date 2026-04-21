@@ -1,12 +1,12 @@
 # Bambu Cloud Monitor
 
-Simple terminal dashboard for monitoring a Bambu Lab printer over MQTT on your local network.
+Terminal dashboards for monitoring one Bambu Lab printer or your entire printer fleet over MQTT on your local network.
 
-This project connects directly to the printer, requests a full status snapshot, and keeps refreshing the dashboard with live print telemetry such as progress, layer counts, temperatures, fan speeds, WiFi signal, and the current file name.
-
-![Bambu Cloud Monitor Dashboard](https://raw.githubusercontent.com/jsammarco/Bambu-Cloud-Monitor/refs/heads/main/Images/Screenshot.JPG)
+The main multi-printer workflow uses `monitor_all.py` to discover every printer tied to your bearer token, resolve local IPs, cache the discovered devices in `found_printers.json`, and display a live all-printers dashboard showing current jobs, progress, layers, temperatures, connection state, and file names in one screen. The single-printer workflow uses `monitor.py` to connect directly to one printer, request a full status snapshot, and keep refreshing a focused dashboard with live print telemetry such as progress, layer counts, temperatures, fan speeds, WiFi signal, and the current file name.
 
 ![Bambu Cloud Monitor All Printers Dashboard](https://raw.githubusercontent.com/jsammarco/Bambu-Cloud-Monitor/refs/heads/main/Images/MonitorAll%20Screenshot.JPG)
+
+![Bambu Cloud Monitor Dashboard](https://raw.githubusercontent.com/jsammarco/Bambu-Cloud-Monitor/refs/heads/main/Images/Screenshot.JPG)
 
 It also includes a multi-printer mode that can discover every printer on your account, cache the results, and show all active jobs in one console dashboard.
 
