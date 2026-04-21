@@ -38,7 +38,10 @@ typedef struct {
     size_t main_menu_index;
     size_t wifi_results_index;
     size_t printer_index;
+    size_t detail_scroll;
     size_t pending_wifi_index;
+    uint32_t last_input_tick;
+    uint32_t last_detail_refresh_tick;
     char password_input[BAMBU_MONITOR_PASSWORD_SIZE];
     char pending_wifi_ssid[BAMBU_MONITOR_WIFI_SSID_SIZE];
     char loaded_token[BAMBU_MONITOR_TOKEN_SIZE];

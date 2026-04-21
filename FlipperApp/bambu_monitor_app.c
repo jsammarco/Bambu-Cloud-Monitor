@@ -30,6 +30,8 @@ typedef struct {
     BambuMonitorApp* app;
 } BambuMonitorMainViewModel;
 
+static void bambu_monitor_app_bridge_activity(void* context, bool active);
+
 static void bambu_monitor_app_queue_busy_action(
     BambuMonitorApp* app,
     uint32_t event,
@@ -49,6 +51,8 @@ static void bambu_monitor_app_refresh_all_printers(BambuMonitorApp* app);
 static void bambu_monitor_app_ensure_asset_dir(BambuMonitorApp* app);
 static void bambu_monitor_app_load_path_settings(BambuMonitorApp* app);
 static void bambu_monitor_app_save_path_settings(BambuMonitorApp* app);
+static bool bambu_monitor_app_refresh_selected_in_place(BambuMonitorApp* app, bool update_status_line);
+static void bambu_monitor_app_tick_event_callback(void* context);
 
 static void bambu_monitor_app_main_view_draw(Canvas* canvas, void* model) {
     BambuMonitorMainViewModel* view_model = model;
@@ -58,6 +62,20 @@ static void bambu_monitor_app_main_view_draw(Canvas* canvas, void* model) {
     }
 
     app_ui_draw(canvas, view_model->app);
+}
+
+static void bambu_monitor_app_bridge_activity(void* context, bool active) {
+    BambuMonitorApp* app = context;
+
+    if(!app || !app->notifications) {
+        return;
+    }
+
+    if(active) {
+        notification_message(app->notifications, &sequence_set_only_green_255);
+    } else {
+        notification_message(app->notifications, &sequence_set_only_blue_255);
+    }
 }
 
 static bool bambu_monitor_app_main_view_input(InputEvent* input_event, void* context) {
@@ -211,7 +229,15 @@ static void bambu_monitor_app_save_path_settings(BambuMonitorApp* app) {
 }
 
 void bambu_monitor_app_request_redraw(BambuMonitorApp* app) {
-    UNUSED(app);
+    BambuMonitorMainViewModel* model = NULL;
+
+    if(!app || !app->main_view) {
+        return;
+    }
+
+    model = view_get_model(app->main_view);
+    UNUSED(model);
+    view_commit_model(app->main_view, true);
 }
 
 void bambu_monitor_app_set_status(BambuMonitorApp* app, const char* status, const char* detail) {
@@ -457,6 +483,63 @@ static void bambu_monitor_app_refresh_all_printers(BambuMonitorApp* app) {
             success,
             printer->serial,
             app->transport.last_response);
+    }
+}
+
+static bool bambu_monitor_app_refresh_selected_in_place(BambuMonitorApp* app, bool update_status_line) {
+    const BambuPrinterInfo* printer = NULL;
+    bool success = false;
+
+    if(!app) {
+        return false;
+    }
+
+    printer = bambu_monitor_app_selected_printer(app);
+    if(!printer) {
+        if(update_status_line) {
+            bambu_monitor_app_set_status(app, "No Printer", "Run discovery first");
+        }
+        return false;
+    }
+
+    success = bambu_transport_refresh_status(&app->transport, printer->serial);
+    if(update_status_line) {
+        bambu_monitor_app_set_status(
+            app,
+            success ? "Status Updated" : "Refresh Failed",
+            app->transport.last_response);
+    }
+
+    return success;
+}
+
+static void bambu_monitor_app_tick_event_callback(void* context) {
+    BambuMonitorApp* app = context;
+    uint32_t now = 0;
+    uint32_t tick_hz = 0;
+    uint32_t idle_ticks = 0;
+    uint32_t refresh_ticks = 0;
+
+    if(!app || app->screen != BambuMonitorScreenPrinterDetail) {
+        return;
+    }
+
+    tick_hz = furi_kernel_get_tick_frequency();
+    now = furi_get_tick();
+    idle_ticks = (BAMBU_MONITOR_DETAIL_REFRESH_IDLE_MS * tick_hz + 999U) / 1000U;
+    refresh_ticks = (BAMBU_MONITOR_DETAIL_REFRESH_MS * tick_hz + 999U) / 1000U;
+
+    if((now - app->last_input_tick) < idle_ticks) {
+        return;
+    }
+
+    if((now - app->last_detail_refresh_tick) < refresh_ticks) {
+        return;
+    }
+
+    app->last_detail_refresh_tick = now;
+    if(bambu_monitor_app_refresh_selected_in_place(app, false)) {
+        bambu_monitor_app_request_redraw(app);
     }
 }
 
@@ -898,7 +981,7 @@ static bool bambu_monitor_app_handle_custom_event(void* context, uint32_t event)
     case BambuMonitorCustomEventRefreshSelected:
         printer = bambu_monitor_app_selected_printer(app);
         if(printer) {
-            success = bambu_transport_refresh_status(&app->transport, printer->serial);
+            success = bambu_monitor_app_refresh_selected_in_place(app, true);
             bambu_monitor_app_log(
                 app,
                 "refresh success=%d serial=%s response=%s",
@@ -929,6 +1012,8 @@ static void bambu_monitor_app_seed_defaults(BambuMonitorApp* app) {
     app->wifi_results_index = 0;
     app->printer_index = 0;
     app->pending_wifi_index = 0;
+    app->last_input_tick = furi_get_tick();
+    app->last_detail_refresh_tick = 0;
     memset(app->password_input, 0, sizeof(app->password_input));
     memset(app->pending_wifi_ssid, 0, sizeof(app->pending_wifi_ssid));
     memset(app->loaded_token, 0, sizeof(app->loaded_token));
@@ -959,6 +1044,10 @@ int32_t bambu_monitor_app(void* p) {
         bambu_monitor_app_log(app, "transport init_failed response=%s", app->transport.last_response);
         bambu_monitor_app_set_status(app, "Transport Init Failed", app->transport.last_response);
     } else {
+        bambu_transport_set_activity_callback(
+            &app->transport,
+            bambu_monitor_app_bridge_activity,
+            app);
         bambu_transport_wifi_status(&app->transport);
         bambu_monitor_app_log(
             app,
@@ -993,6 +1082,10 @@ int32_t bambu_monitor_app(void* p) {
     view_set_input_callback(app->main_view, bambu_monitor_app_main_view_input);
 
     view_dispatcher_set_event_callback_context(app->view_dispatcher, app);
+    view_dispatcher_set_tick_event_callback(
+        app->view_dispatcher,
+        bambu_monitor_app_tick_event_callback,
+        250U);
     view_dispatcher_set_custom_event_callback(
         app->view_dispatcher,
         bambu_monitor_app_handle_custom_event);

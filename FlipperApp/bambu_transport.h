@@ -30,10 +30,24 @@ typedef struct {
     char file_name[BAMBU_MONITOR_FILE_SIZE];
     bool online;
     bool has_status;
+    bool has_progress;
+    bool has_layer;
+    bool has_total_layers;
+    bool has_remaining_minutes;
+    bool has_speed;
+    bool has_fan;
+    bool has_fan_aux1;
+    bool has_fan_aux2;
+    bool has_nozzle_temp;
+    bool has_bed_temp;
     uint8_t progress;
     uint16_t layer;
     uint16_t total_layers;
     uint16_t remaining_minutes;
+    uint16_t speed;
+    uint16_t fan;
+    uint16_t fan_aux1;
+    uint16_t fan_aux2;
     float nozzle_temp;
     float bed_temp;
 } BambuPrinterInfo;
@@ -54,6 +68,8 @@ typedef struct {
     bool (*is_ready)(const BambuTransport* transport);
 } BambuTransportOps;
 
+typedef void (*BambuTransportActivityCallback)(void* context, bool active);
+
 struct BambuTransport {
     const BambuTransportOps* ops;
     bool initialized;
@@ -69,6 +85,8 @@ struct BambuTransport {
     FuriHalSerialHandle* serial_handle;
     FuriStreamBuffer* rx_stream;
     char tx_line_buffer[512];
+    BambuTransportActivityCallback activity_callback;
+    void* activity_context;
 };
 
 const BambuTransportOps* bambu_transport_live_ops(void);
@@ -141,4 +159,16 @@ static inline bool bambu_transport_refresh_status(BambuTransport* transport, con
 static inline bool bambu_transport_is_ready(const BambuTransport* transport) {
     return transport && transport->ops && transport->ops->is_ready &&
            transport->ops->is_ready(transport);
+}
+
+static inline void bambu_transport_set_activity_callback(
+    BambuTransport* transport,
+    BambuTransportActivityCallback callback,
+    void* context) {
+    if(!transport) {
+        return;
+    }
+
+    transport->activity_callback = callback;
+    transport->activity_context = context;
 }

@@ -19,6 +19,8 @@ static const char* const bambu_main_menu_items[] = {
 
 #define BAMBU_WIFI_VISIBLE_ITEMS 4U
 #define BAMBU_PRINTER_VISIBLE_ITEMS 4U
+#define BAMBU_PRINTER_DETAIL_VISIBLE_ITEMS 4U
+#define BAMBU_PRINTER_DETAIL_LINE_COUNT 11U
 
 static size_t bambu_ui_main_menu_count(void) {
     return sizeof(bambu_main_menu_items) / sizeof(bambu_main_menu_items[0]);
@@ -26,6 +28,28 @@ static size_t bambu_ui_main_menu_count(void) {
 
 static void bambu_ui_draw_line(Canvas* canvas, uint8_t y, const char* text) {
     canvas_draw_str(canvas, 0, y, text ? text : "");
+}
+
+static const char* bambu_ui_unknown_text(bool has_status, const char* value) {
+    return (has_status && value && value[0]) ? value : "??";
+}
+
+static void bambu_ui_format_optional_u16(char* out, size_t out_size, bool is_known, uint16_t value) {
+    if(!is_known) {
+        snprintf(out, out_size, "??");
+        return;
+    }
+
+    snprintf(out, out_size, "%u", value);
+}
+
+static void bambu_ui_format_optional_temp(char* out, size_t out_size, bool is_known, float value) {
+    if(!is_known) {
+        snprintf(out, out_size, "??");
+        return;
+    }
+
+    snprintf(out, out_size, "%.1f", (double)value);
 }
 
 static void bambu_ui_draw_header(Canvas* canvas, const BambuMonitorApp* app) {
@@ -153,41 +177,135 @@ static void bambu_ui_draw_printer_list(Canvas* canvas, BambuMonitorApp* app) {
 
 static void bambu_ui_draw_printer_detail(Canvas* canvas, BambuMonitorApp* app) {
     const BambuPrinterInfo* printer = bambu_monitor_app_selected_printer(app);
-    char line[BAMBU_MONITOR_DETAIL_TEXT_SIZE];
+    const char* lines[BAMBU_PRINTER_DETAIL_LINE_COUNT];
+    char line_buf[BAMBU_PRINTER_DETAIL_LINE_COUNT][BAMBU_MONITOR_DETAIL_TEXT_SIZE];
+    size_t line_count = 0;
+    size_t first_visible = 0;
+    char value_a[16];
+    char value_b[16];
+    char value_c[16];
 
     canvas_clear(canvas);
     canvas_set_font(canvas, FontPrimary);
     bambu_ui_draw_line(canvas, 12, "Printer Detail");
     canvas_set_font(canvas, FontSecondary);
-    bambu_ui_draw_line(canvas, 22, "Up/OK refresh L/R nav");
+    bambu_ui_draw_line(canvas, 22, "OK refresh Up/Dn scroll");
 
     if(!printer) {
         bambu_ui_draw_line(canvas, 38, "No printer selected");
         return;
     }
 
-    snprintf(line, sizeof(line), "Name: %.18s", printer->name);
-    bambu_ui_draw_line(canvas, 32, line);
-    snprintf(line, sizeof(line), "IP: %s", printer->ip[0] ? printer->ip : "??");
-    bambu_ui_draw_line(canvas, 40, line);
+    snprintf(line_buf[line_count], sizeof(line_buf[line_count]), "Name: %.18s", printer->name);
+    lines[line_count] = line_buf[line_count];
+    line_count++;
+
+    snprintf(line_buf[line_count], sizeof(line_buf[line_count]), "IP: %s", printer->ip[0] ? printer->ip : "??");
+    lines[line_count] = line_buf[line_count];
+    line_count++;
+
     snprintf(
-        line,
-        sizeof(line),
+        line_buf[line_count],
+        sizeof(line_buf[line_count]),
         "State: %.16s",
-        printer->has_status ? (printer->state[0] ? printer->state : "??") : "??");
-    bambu_ui_draw_line(canvas, 48, line);
-    if(printer->has_status) {
+        bambu_ui_unknown_text(printer->has_status, printer->state));
+    lines[line_count] = line_buf[line_count];
+    line_count++;
+
+    if(printer->has_progress || printer->has_layer || printer->has_total_layers) {
+        bambu_ui_format_optional_u16(value_a, sizeof(value_a), printer->has_progress, printer->progress);
+        bambu_ui_format_optional_u16(value_b, sizeof(value_b), printer->has_layer, printer->layer);
+        bambu_ui_format_optional_u16(value_c, sizeof(value_c), printer->has_total_layers, printer->total_layers);
         snprintf(
-            line,
-            sizeof(line),
-            "Job: %u%% L%u/%u",
-            printer->progress,
-            printer->layer,
-            printer->total_layers);
+            line_buf[line_count],
+            sizeof(line_buf[line_count]),
+            "Job: %s%% L%s/%s",
+            value_a,
+            value_b,
+            value_c);
     } else {
-        snprintf(line, sizeof(line), "Job: %s L%s/%s", "??", "??", "??");
+        snprintf(line_buf[line_count], sizeof(line_buf[line_count]), "Job: %s L%s/%s", "??", "??", "??");
     }
-    bambu_ui_draw_line(canvas, 56, line);
+    lines[line_count] = line_buf[line_count];
+    line_count++;
+
+    if(printer->has_remaining_minutes) {
+        snprintf(
+            line_buf[line_count],
+            sizeof(line_buf[line_count]),
+            "Remain: %u min",
+            printer->remaining_minutes);
+    } else {
+        snprintf(line_buf[line_count], sizeof(line_buf[line_count]), "Remain: ?? min");
+    }
+    lines[line_count] = line_buf[line_count];
+    line_count++;
+
+    bambu_ui_format_optional_temp(value_a, sizeof(value_a), printer->has_nozzle_temp, printer->nozzle_temp);
+    snprintf(line_buf[line_count], sizeof(line_buf[line_count]), "Nozzle: %s C", value_a);
+    lines[line_count] = line_buf[line_count];
+    line_count++;
+    bambu_ui_format_optional_temp(value_a, sizeof(value_a), printer->has_bed_temp, printer->bed_temp);
+    snprintf(line_buf[line_count], sizeof(line_buf[line_count]), "Bed: %s C", value_a);
+    lines[line_count] = line_buf[line_count];
+    line_count++;
+    snprintf(
+        line_buf[line_count],
+        sizeof(line_buf[line_count]),
+        "WiFi: %.14s",
+        bambu_ui_unknown_text(printer->has_status, printer->wifi_signal));
+    lines[line_count] = line_buf[line_count];
+    line_count++;
+
+    bambu_ui_format_optional_u16(value_a, sizeof(value_a), printer->has_speed, printer->speed);
+    snprintf(line_buf[line_count], sizeof(line_buf[line_count]), "Speed: %s", value_a);
+    lines[line_count] = line_buf[line_count];
+    line_count++;
+
+    bambu_ui_format_optional_u16(value_a, sizeof(value_a), printer->has_fan, printer->fan);
+    bambu_ui_format_optional_u16(value_b, sizeof(value_b), printer->has_fan_aux1, printer->fan_aux1);
+    bambu_ui_format_optional_u16(value_c, sizeof(value_c), printer->has_fan_aux2, printer->fan_aux2);
+    snprintf(
+        line_buf[line_count],
+        sizeof(line_buf[line_count]),
+        "Fans: %s/%s/%s",
+        value_a,
+        value_b,
+        value_c);
+    lines[line_count] = line_buf[line_count];
+    line_count++;
+
+    snprintf(
+        line_buf[line_count],
+        sizeof(line_buf[line_count]),
+        "File: %.14s",
+        bambu_ui_unknown_text(printer->has_status, printer->file_name));
+    lines[line_count] = line_buf[line_count];
+    line_count++;
+
+    if(line_count > BAMBU_PRINTER_DETAIL_VISIBLE_ITEMS) {
+        size_t max_scroll = line_count - BAMBU_PRINTER_DETAIL_VISIBLE_ITEMS;
+        first_visible = (app->detail_scroll > max_scroll) ? max_scroll : app->detail_scroll;
+    } else {
+        first_visible = 0;
+    }
+
+    for(size_t i = 0; i < BAMBU_PRINTER_DETAIL_VISIBLE_ITEMS; i++) {
+        size_t item_index = first_visible + i;
+        uint8_t y = 32 + (uint8_t)(i * 8U);
+        if(item_index >= line_count) {
+            break;
+        }
+        bambu_ui_draw_line(canvas, y, lines[item_index]);
+    }
+
+    if(first_visible > 0) {
+        canvas_draw_str(canvas, 120, 30, "^");
+    }
+
+    if(first_visible + BAMBU_PRINTER_DETAIL_VISIBLE_ITEMS < line_count) {
+        canvas_draw_str(canvas, 120, 62, "v");
+    }
 }
 
 static void bambu_ui_draw_about(Canvas* canvas) {
@@ -333,6 +451,7 @@ static void bambu_ui_handle_printer_list(BambuMonitorApp* app, const InputEvent*
         break;
     case InputKeyOk:
         app->screen = BambuMonitorScreenPrinterDetail;
+        app->detail_scroll = 0;
         break;
     case InputKeyBack:
         app->screen = BambuMonitorScreenMainMenu;
@@ -343,19 +462,36 @@ static void bambu_ui_handle_printer_list(BambuMonitorApp* app, const InputEvent*
 }
 
 static void bambu_ui_handle_printer_detail(BambuMonitorApp* app, const InputEvent* input_event) {
+    size_t max_scroll = 0;
+
+    if(app->transport.printer_count > 0 && BAMBU_PRINTER_DETAIL_LINE_COUNT > BAMBU_PRINTER_DETAIL_VISIBLE_ITEMS) {
+        max_scroll = BAMBU_PRINTER_DETAIL_LINE_COUNT - BAMBU_PRINTER_DETAIL_VISIBLE_ITEMS;
+    }
+
     switch(input_event->key) {
     case InputKeyUp:
+        if(app->detail_scroll > 0) {
+            app->detail_scroll--;
+        }
+        break;
+    case InputKeyDown:
+        if(app->detail_scroll < max_scroll) {
+            app->detail_scroll++;
+        }
+        break;
     case InputKeyOk:
         bambu_monitor_app_queue_refresh_selected(app);
         break;
     case InputKeyLeft:
         if(app->printer_index > 0) {
             app->printer_index--;
+            app->detail_scroll = 0;
         }
         break;
     case InputKeyRight:
         if(app->printer_index + 1U < app->transport.printer_count) {
             app->printer_index++;
+            app->detail_scroll = 0;
         }
         break;
     case InputKeyBack:
@@ -376,6 +512,8 @@ void app_ui_handle_input(BambuMonitorApp* app, const InputEvent* input_event) {
     if(!app || !input_event || !bambu_ui_accept_input(input_event)) {
         return;
     }
+
+    app->last_input_tick = furi_get_tick();
 
     switch(app->screen) {
     case BambuMonitorScreenMainMenu:

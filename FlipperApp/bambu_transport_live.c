@@ -6,7 +6,7 @@
 
 #define BAMBU_BRIDGE_BAUDRATE 115200U
 #define BAMBU_BRIDGE_RX_STREAM_SIZE 1024U
-#define BAMBU_BRIDGE_LINE_SIZE 512U
+#define BAMBU_BRIDGE_LINE_SIZE 1024U
 #define BAMBU_BRIDGE_DEFAULT_TIMEOUT_MS 15000U
 #define BAMBU_BRIDGE_PING_TIMEOUT_MS 1000U
 
@@ -19,6 +19,12 @@ static uint32_t bambu_bridge_ms_to_ticks(uint32_t ms) {
         ticks = 1;
     }
     return (uint32_t)ticks;
+}
+
+static void bambu_bridge_activity(BambuTransport* transport, bool active) {
+    if(transport && transport->activity_callback) {
+        transport->activity_callback(transport->activity_context, active);
+    }
 }
 
 static void bambu_bridge_set_response(BambuTransport* transport, const char* message) {
@@ -149,6 +155,38 @@ static BambuPrinterInfo* bambu_bridge_find_or_add_printer(BambuTransport* transp
     return &transport->printers[index];
 }
 
+static size_t bambu_bridge_split_fields(char* text, char delimiter, char** fields, size_t max_fields) {
+    size_t count = 0;
+    char* cursor = text;
+
+    if(!text || !fields || max_fields == 0) {
+        return 0;
+    }
+
+    fields[count++] = cursor;
+    while(*cursor && count < max_fields) {
+        if(*cursor == delimiter) {
+            *cursor = '\0';
+            fields[count++] = cursor + 1;
+        }
+        cursor++;
+    }
+
+    return count;
+}
+
+static const char* bambu_bridge_field_or_empty(char** fields, size_t field_count, size_t index) {
+    if(!fields || index >= field_count || !fields[index]) {
+        return "";
+    }
+
+    return fields[index];
+}
+
+static bool bambu_bridge_field_known(const char* value) {
+    return value && value[0] && strcmp(value, "?") != 0;
+}
+
 static void bambu_bridge_handle_wifi_line(BambuTransport* transport, const char* line) {
     char ssid[34];
     int rssi = 0;
@@ -248,57 +286,90 @@ static void bambu_bridge_handle_printer_line(BambuTransport* transport, const ch
 }
 
 static void bambu_bridge_handle_status_line(BambuTransport* transport, const char* line) {
-    char serial[BAMBU_MONITOR_SERIAL_SIZE];
-    char state[BAMBU_MONITOR_STATUS_TEXT_SIZE];
-    unsigned int progress = 0;
-    unsigned int layer = 0;
-    unsigned int total_layers = 0;
-    unsigned int remaining = 0;
+    char line_copy[BAMBU_BRIDGE_LINE_SIZE];
+    char* fields[14];
+    BambuPrinterInfo* printer;
+    unsigned long progress = 0;
+    unsigned long layer = 0;
+    unsigned long total_layers = 0;
+    unsigned long remaining = 0;
+    unsigned long speed = 0;
+    unsigned long fan = 0;
+    unsigned long fan_aux1 = 0;
+    unsigned long fan_aux2 = 0;
     float nozzle = 0.0f;
     float bed = 0.0f;
-    char wifi[BAMBU_MONITOR_WIFI_SIGNAL_SIZE];
-    char file_name[BAMBU_MONITOR_FILE_SIZE];
-    BambuPrinterInfo* printer;
+    size_t field_count = 0;
 
     if(!transport || !line || strncmp(line, "STATUS|", 7) != 0) {
         return;
     }
 
-    memset(serial, 0, sizeof(serial));
-    memset(state, 0, sizeof(state));
-    memset(wifi, 0, sizeof(wifi));
-    memset(file_name, 0, sizeof(file_name));
-
-    if(sscanf(
-           line,
-           "STATUS|%31[^|]|%63[^|]|%u|%u|%u|%u|%f|%f|%15[^|]|%47[^|]",
-           serial,
-           state,
-           &progress,
-           &layer,
-           &total_layers,
-           &remaining,
-           &nozzle,
-           &bed,
-           wifi,
-           file_name) != 10) {
+    memset(line_copy, 0, sizeof(line_copy));
+    snprintf(line_copy, sizeof(line_copy), "%s", line + 7);
+    field_count = bambu_bridge_split_fields(line_copy, '|', fields, COUNT_OF(fields));
+    if(field_count < 9U) {
         return;
     }
 
-    printer = bambu_bridge_find_or_add_printer(transport, serial);
+    progress = strtoul(bambu_bridge_field_or_empty(fields, field_count, 2), NULL, 10);
+    layer = strtoul(bambu_bridge_field_or_empty(fields, field_count, 3), NULL, 10);
+    total_layers = strtoul(bambu_bridge_field_or_empty(fields, field_count, 4), NULL, 10);
+    remaining = strtoul(bambu_bridge_field_or_empty(fields, field_count, 5), NULL, 10);
+    nozzle = strtof(bambu_bridge_field_or_empty(fields, field_count, 6), NULL);
+    bed = strtof(bambu_bridge_field_or_empty(fields, field_count, 7), NULL);
+    speed = strtoul(bambu_bridge_field_or_empty(fields, field_count, 10), NULL, 10);
+    fan = strtoul(bambu_bridge_field_or_empty(fields, field_count, 11), NULL, 10);
+    fan_aux1 = strtoul(bambu_bridge_field_or_empty(fields, field_count, 12), NULL, 10);
+    fan_aux2 = strtoul(bambu_bridge_field_or_empty(fields, field_count, 13), NULL, 10);
+
+    printer = bambu_bridge_find_or_add_printer(transport, bambu_bridge_field_or_empty(fields, field_count, 0));
     if(!printer) {
         return;
     }
 
-    snprintf(printer->state, sizeof(printer->state), "%s", state);
-    snprintf(printer->wifi_signal, sizeof(printer->wifi_signal), "%s", wifi);
-    snprintf(printer->file_name, sizeof(printer->file_name), "%s", file_name);
-    printer->progress = (uint8_t)progress;
-    printer->layer = (uint16_t)layer;
-    printer->total_layers = (uint16_t)total_layers;
-    printer->remaining_minutes = (uint16_t)remaining;
-    printer->nozzle_temp = nozzle;
-    printer->bed_temp = bed;
+    snprintf(
+        printer->state,
+        sizeof(printer->state),
+        "%s",
+        bambu_bridge_field_known(bambu_bridge_field_or_empty(fields, field_count, 1)) ?
+            bambu_bridge_field_or_empty(fields, field_count, 1) :
+            "");
+    snprintf(
+        printer->wifi_signal,
+        sizeof(printer->wifi_signal),
+        "%s",
+        bambu_bridge_field_known(bambu_bridge_field_or_empty(fields, field_count, 8)) ?
+            bambu_bridge_field_or_empty(fields, field_count, 8) :
+            "");
+    snprintf(
+        printer->file_name,
+        sizeof(printer->file_name),
+        "%s",
+        bambu_bridge_field_known(bambu_bridge_field_or_empty(fields, field_count, 9)) ?
+            bambu_bridge_field_or_empty(fields, field_count, 9) :
+            "");
+    printer->has_progress = bambu_bridge_field_known(bambu_bridge_field_or_empty(fields, field_count, 2));
+    printer->has_layer = bambu_bridge_field_known(bambu_bridge_field_or_empty(fields, field_count, 3));
+    printer->has_total_layers = bambu_bridge_field_known(bambu_bridge_field_or_empty(fields, field_count, 4));
+    printer->has_remaining_minutes =
+        bambu_bridge_field_known(bambu_bridge_field_or_empty(fields, field_count, 5));
+    printer->has_nozzle_temp = bambu_bridge_field_known(bambu_bridge_field_or_empty(fields, field_count, 6));
+    printer->has_bed_temp = bambu_bridge_field_known(bambu_bridge_field_or_empty(fields, field_count, 7));
+    printer->has_speed = bambu_bridge_field_known(bambu_bridge_field_or_empty(fields, field_count, 10));
+    printer->has_fan = bambu_bridge_field_known(bambu_bridge_field_or_empty(fields, field_count, 11));
+    printer->has_fan_aux1 = bambu_bridge_field_known(bambu_bridge_field_or_empty(fields, field_count, 12));
+    printer->has_fan_aux2 = bambu_bridge_field_known(bambu_bridge_field_or_empty(fields, field_count, 13));
+    printer->progress = printer->has_progress ? (uint8_t)progress : 0U;
+    printer->layer = printer->has_layer ? (uint16_t)layer : 0U;
+    printer->total_layers = printer->has_total_layers ? (uint16_t)total_layers : 0U;
+    printer->remaining_minutes = printer->has_remaining_minutes ? (uint16_t)remaining : 0U;
+    printer->speed = printer->has_speed ? (uint16_t)speed : 0U;
+    printer->fan = printer->has_fan ? (uint16_t)fan : 0U;
+    printer->fan_aux1 = printer->has_fan_aux1 ? (uint16_t)fan_aux1 : 0U;
+    printer->fan_aux2 = printer->has_fan_aux2 ? (uint16_t)fan_aux2 : 0U;
+    printer->nozzle_temp = printer->has_nozzle_temp ? nozzle : 0.0f;
+    printer->bed_temp = printer->has_bed_temp ? bed : 0.0f;
     printer->has_status = true;
 
     bambu_bridge_set_response(transport, printer->state);
@@ -321,14 +392,20 @@ static bool bambu_bridge_wait_for_result(
                 } else {
                     bambu_bridge_set_response(transport, "WiFi status updated");
                 }
+            } else if(strcmp(line, "OK|BAMBU_STATUS|0") == 0) {
+                bambu_bridge_set_response(transport, "Waiting for cached status");
+            } else if(strcmp(line, "OK|BAMBU_STATUS|1") == 0 && transport->last_response[0] == '\0') {
+                bambu_bridge_set_response(transport, "Cached status ready");
             } else if(strncmp(line, "OK|", 3) == 0 && transport->last_response[0] == '\0') {
                 bambu_bridge_set_response(transport, line + 3);
             }
+            bambu_bridge_activity(transport, false);
             return true;
         }
 
         if(strncmp(line, "ERR|", 4) == 0) {
             bambu_bridge_set_response(transport, line + 4);
+            bambu_bridge_activity(transport, false);
             return false;
         }
 
@@ -338,12 +415,14 @@ static bool bambu_bridge_wait_for_result(
     }
 
     bambu_bridge_set_response(transport, "Bridge timeout");
+    bambu_bridge_activity(transport, false);
     return false;
 }
 
 static bool bambu_bridge_ping(BambuTransport* transport) {
     bambu_bridge_set_response(transport, "");
     bambu_bridge_flush_rx(transport);
+    bambu_bridge_activity(transport, true);
     bambu_bridge_send_command(transport, "PING");
     return bambu_bridge_wait_for_result(transport, BAMBU_BRIDGE_PING_TIMEOUT_MS, NULL);
 }
@@ -440,6 +519,7 @@ static bool bambu_transport_live_scan_wifi(BambuTransport* transport) {
     transport->wifi_network_count = 0;
     bambu_bridge_set_response(transport, "");
     bambu_bridge_flush_rx(transport);
+    bambu_bridge_activity(transport, true);
     bambu_bridge_send_command(transport, "WIFI_SCAN");
     return bambu_bridge_wait_for_result(
         transport,
@@ -474,6 +554,7 @@ static bool bambu_transport_live_wifi_connect(
 
     bambu_bridge_set_response(transport, "");
     bambu_bridge_flush_rx(transport);
+    bambu_bridge_activity(transport, true);
     bambu_bridge_send_command(transport, transport->tx_line_buffer);
     return bambu_bridge_wait_for_result(
         transport,
@@ -488,6 +569,7 @@ static bool bambu_transport_live_wifi_reconnect(BambuTransport* transport) {
 
     bambu_bridge_set_response(transport, "");
     bambu_bridge_flush_rx(transport);
+    bambu_bridge_activity(transport, true);
     bambu_bridge_send_command(transport, "WIFI_RECONNECT");
     return bambu_bridge_wait_for_result(
         transport,
@@ -502,6 +584,7 @@ static bool bambu_transport_live_wifi_status(BambuTransport* transport) {
 
     bambu_bridge_set_response(transport, "");
     bambu_bridge_flush_rx(transport);
+    bambu_bridge_activity(transport, true);
     bambu_bridge_send_command(transport, "WIFI_STATUS");
     return bambu_bridge_wait_for_result(
         transport,
@@ -523,6 +606,7 @@ static bool bambu_transport_live_set_token(BambuTransport* transport, const char
         token);
     bambu_bridge_set_response(transport, "");
     bambu_bridge_flush_rx(transport);
+    bambu_bridge_activity(transport, true);
     bambu_bridge_send_command(transport, transport->tx_line_buffer);
     return bambu_bridge_wait_for_result(
         transport,
@@ -537,6 +621,7 @@ static bool bambu_transport_live_test_cloud_profile(BambuTransport* transport) {
 
     bambu_bridge_set_response(transport, "");
     bambu_bridge_flush_rx(transport);
+    bambu_bridge_activity(transport, true);
     bambu_bridge_send_command(transport, "BAMBU_TEST_PROFILE");
     return bambu_bridge_wait_for_result(
         transport,
@@ -553,6 +638,7 @@ static bool bambu_transport_live_discover_printers(BambuTransport* transport) {
     memset(transport->printers, 0, sizeof(transport->printers));
     bambu_bridge_set_response(transport, "");
     bambu_bridge_flush_rx(transport);
+    bambu_bridge_activity(transport, true);
     bambu_bridge_send_command(transport, "BAMBU_DISCOVER");
     return bambu_bridge_wait_for_result(
         transport,
@@ -583,6 +669,7 @@ static bool bambu_transport_live_refresh_status(BambuTransport* transport, const
 
     bambu_bridge_set_response(transport, "");
     bambu_bridge_flush_rx(transport);
+    bambu_bridge_activity(transport, true);
     snprintf(
         transport->tx_line_buffer,
         sizeof(transport->tx_line_buffer),

@@ -13,7 +13,49 @@ constexpr const char* kPrefsNamespace = "bambu-bridge";
 constexpr const char* kApiBase = "https://api.bambulab.com";
 constexpr const char* kPythonUserAgent = "python-requests/2.31.0";
 constexpr uint16_t kMqttPort = 8883;
-constexpr uint32_t kMqttTimeoutMs = 8000;
+constexpr uint32_t kMqttTimeoutMs = 2500;
+constexpr uint32_t kMqttPushallIntervalMs = 250;
+constexpr uint32_t kMqttCollectWindowMs = 700;
+constexpr uint32_t kMqttQuietWindowMs = 150;
+constexpr uint32_t kCacheRefreshIntervalMs = 4000;
+constexpr size_t kMaxCachedPrinters = 8;
+
+struct CachedPrinterState {
+  bool used = false;
+  bool hasStatus = false;
+  String serial;
+  String ip;
+  String accessCode;
+  String name;
+  String model;
+  String cloudStatus;
+  String state;
+  String wifiSignal;
+  String gcodeFile;
+  bool hasProgress = false;
+  bool hasLayer = false;
+  bool hasTotalLayers = false;
+  bool hasRemainingMinutes = false;
+  bool hasSpeed = false;
+  bool hasFan = false;
+  bool hasFanAux1 = false;
+  bool hasFanAux2 = false;
+  bool hasNozzleTemp = false;
+  bool hasBedTemp = false;
+  bool online = false;
+  uint8_t progress = 0;
+  uint16_t layer = 0;
+  uint16_t totalLayers = 0;
+  uint16_t remainingMinutes = 0;
+  uint16_t speed = 0;
+  uint16_t fan = 0;
+  uint16_t fanAux1 = 0;
+  uint16_t fanAux2 = 0;
+  float nozzleTemp = 0.0f;
+  float bedTemp = 0.0f;
+  uint32_t lastRefreshMs = 0;
+  uint32_t lastAttemptMs = 0;
+};
 
 Preferences prefs;
 String bridgeLine;
@@ -22,8 +64,11 @@ PubSubClient mqttClient(mqttNetClient);
 String mqttExpectedTopic;
 String mqttLastPayload;
 bool mqttMessageReceived = false;
+CachedPrinterState cachedPrinters[kMaxCachedPrinters];
+size_t nextRefreshIndex = 0;
 
 void bridgeReply(const String& line);
+bool ensureWifiConnected();
 
 String getSavedToken() {
   return prefs.getString("token", "");
@@ -48,6 +93,22 @@ String sanitizeForBridge(String value, size_t maxLen = 180) {
   return value;
 }
 
+bool jsonHasValue(const JsonObjectConst& object, const char* key) {
+  return object.containsKey(key) && !object[key].isNull();
+}
+
+String bridgeValueOrUnknown(const String& value) {
+  return value.length() > 0 ? value : String("?");
+}
+
+String bridgeNumberOrUnknown(bool known, unsigned long value) {
+  return known ? String(value) : String("?");
+}
+
+String bridgeFloatOrUnknown(bool known, float value) {
+  return known ? String(value) : String("?");
+}
+
 void onMqttMessage(char* topic, byte* payload, unsigned int length) {
   String topicStr = topic ? String(topic) : String();
   if (mqttExpectedTopic.length() > 0 && topicStr != mqttExpectedTopic) {
@@ -60,6 +121,332 @@ void onMqttMessage(char* topic, byte* payload, unsigned int length) {
     mqttLastPayload += static_cast<char>(payload[i]);
   }
   mqttMessageReceived = true;
+}
+
+void publishPushAll(const String& requestTopic) {
+  mqttClient.publish(
+      requestTopic.c_str(),
+      "{\"pushing\":{\"sequence_id\":\"0\",\"command\":\"pushall\"}}");
+}
+
+bool mergePrintPayload(DynamicJsonDocument& mergedDoc, const String& payload) {
+  DynamicJsonDocument packetDoc(8192);
+  JsonObject mergedPrint;
+  JsonObject packetPrint;
+  DeserializationError jsonError = deserializeJson(packetDoc, payload);
+
+  if (jsonError) {
+    return false;
+  }
+
+  if (!packetDoc["print"].is<JsonObject>()) {
+    return false;
+  }
+
+  if (!mergedDoc.is<JsonObject>()) {
+    mergedDoc.to<JsonObject>();
+  }
+
+  mergedPrint = mergedDoc.as<JsonObject>();
+  packetPrint = packetDoc["print"].as<JsonObject>();
+  for (JsonPair kv : packetPrint) {
+    mergedPrint[kv.key()] = kv.value();
+  }
+
+  return true;
+}
+
+bool hasUsefulPrintData(const JsonObjectConst& print) {
+  return print.containsKey("gcode_state") ||
+         print.containsKey("mc_percent") ||
+         print.containsKey("nozzle_temper") ||
+         print.containsKey("bed_temper") ||
+         print.containsKey("wifi_signal") ||
+         print.containsKey("gcode_file") ||
+         print.containsKey("cooling_fan_speed") ||
+         print.containsKey("big_fan1_speed") ||
+         print.containsKey("big_fan2_speed");
+}
+
+CachedPrinterState* findCachedPrinter(const String& serial) {
+  for (size_t i = 0; i < kMaxCachedPrinters; ++i) {
+    if (cachedPrinters[i].used && cachedPrinters[i].serial == serial) {
+      return &cachedPrinters[i];
+    }
+  }
+
+  return nullptr;
+}
+
+CachedPrinterState* ensureCachedPrinter(
+    const String& serial,
+    const String& ip,
+    const String& accessCode) {
+  CachedPrinterState* entry = findCachedPrinter(serial);
+
+  if (!entry) {
+    for (size_t i = 0; i < kMaxCachedPrinters; ++i) {
+      if (!cachedPrinters[i].used) {
+        entry = &cachedPrinters[i];
+        *entry = CachedPrinterState();
+        entry->used = true;
+        entry->serial = serial;
+        break;
+      }
+    }
+  }
+
+  if (!entry) {
+    entry = &cachedPrinters[nextRefreshIndex % kMaxCachedPrinters];
+    *entry = CachedPrinterState();
+    entry->used = true;
+    entry->serial = serial;
+    nextRefreshIndex = (nextRefreshIndex + 1U) % kMaxCachedPrinters;
+  }
+
+  if (!ip.isEmpty()) {
+    entry->ip = ip;
+  }
+  if (!accessCode.isEmpty()) {
+    entry->accessCode = accessCode;
+  }
+
+  return entry;
+}
+
+void updateCachedPrinterFromPrint(CachedPrinterState& entry, const JsonObjectConst& print) {
+  if (jsonHasValue(print, "gcode_state")) {
+    entry.state = sanitizeForBridge(String(print["gcode_state"] | ""), 40);
+  }
+  if (jsonHasValue(print, "wifi_signal")) {
+    entry.wifiSignal = sanitizeForBridge(String(print["wifi_signal"] | ""), 24);
+  }
+  if (jsonHasValue(print, "gcode_file")) {
+    entry.gcodeFile = sanitizeForBridge(String(print["gcode_file"] | ""), 80);
+  }
+  if (jsonHasValue(print, "mc_percent")) {
+    entry.progress = static_cast<uint8_t>(print["mc_percent"] | 0);
+    entry.hasProgress = true;
+  }
+  if (jsonHasValue(print, "layer_num")) {
+    entry.layer = static_cast<uint16_t>(print["layer_num"] | 0);
+    entry.hasLayer = true;
+  }
+  if (jsonHasValue(print, "total_layer_num")) {
+    entry.totalLayers = static_cast<uint16_t>(print["total_layer_num"] | 0);
+    entry.hasTotalLayers = true;
+  }
+  if (jsonHasValue(print, "mc_remaining_time")) {
+    entry.remainingMinutes = static_cast<uint16_t>(print["mc_remaining_time"] | 0);
+    entry.hasRemainingMinutes = true;
+  }
+  if (jsonHasValue(print, "spd_lvl")) {
+    entry.speed = static_cast<uint16_t>(print["spd_lvl"] | 0);
+    entry.hasSpeed = true;
+  }
+  if (jsonHasValue(print, "cooling_fan_speed")) {
+    entry.fan = static_cast<uint16_t>(print["cooling_fan_speed"] | 0);
+    entry.hasFan = true;
+  }
+  if (jsonHasValue(print, "big_fan1_speed")) {
+    entry.fanAux1 = static_cast<uint16_t>(print["big_fan1_speed"] | 0);
+    entry.hasFanAux1 = true;
+  }
+  if (jsonHasValue(print, "big_fan2_speed")) {
+    entry.fanAux2 = static_cast<uint16_t>(print["big_fan2_speed"] | 0);
+    entry.hasFanAux2 = true;
+  }
+  if (jsonHasValue(print, "nozzle_temper")) {
+    entry.nozzleTemp = static_cast<float>(print["nozzle_temper"] | 0);
+    entry.hasNozzleTemp = true;
+  }
+  if (jsonHasValue(print, "bed_temper")) {
+    entry.bedTemp = static_cast<float>(print["bed_temper"] | 0);
+    entry.hasBedTemp = true;
+  }
+  entry.hasStatus = true;
+  entry.lastRefreshMs = millis();
+}
+
+void emitCachedStatus(const CachedPrinterState& entry) {
+  String line = "STATUS|";
+  line += entry.serial;
+  line += "|";
+  line += bridgeValueOrUnknown(sanitizeForBridge(entry.state, 40));
+  line += "|";
+  line += bridgeNumberOrUnknown(entry.hasProgress, entry.progress);
+  line += "|";
+  line += bridgeNumberOrUnknown(entry.hasLayer, entry.layer);
+  line += "|";
+  line += bridgeNumberOrUnknown(entry.hasTotalLayers, entry.totalLayers);
+  line += "|";
+  line += bridgeNumberOrUnknown(entry.hasRemainingMinutes, entry.remainingMinutes);
+  line += "|";
+  line += bridgeFloatOrUnknown(entry.hasNozzleTemp, entry.nozzleTemp);
+  line += "|";
+  line += bridgeFloatOrUnknown(entry.hasBedTemp, entry.bedTemp);
+  line += "|";
+  line += bridgeValueOrUnknown(sanitizeForBridge(entry.wifiSignal, 24));
+  line += "|";
+  line += bridgeValueOrUnknown(sanitizeForBridge(entry.gcodeFile, 80));
+  line += "|";
+  line += bridgeNumberOrUnknown(entry.hasSpeed, entry.speed);
+  line += "|";
+  line += bridgeNumberOrUnknown(entry.hasFan, entry.fan);
+  line += "|";
+  line += bridgeNumberOrUnknown(entry.hasFanAux1, entry.fanAux1);
+  line += "|";
+  line += bridgeNumberOrUnknown(entry.hasFanAux2, entry.fanAux2);
+  bridgeReply(line);
+}
+
+bool collectPrinterStatus(
+    const String& serial,
+    const String& ip,
+    const String& accessCode,
+    CachedPrinterState* cacheEntry,
+    String* errorOut) {
+  DynamicJsonDocument mergedDoc(12288);
+  String requestTopic;
+  uint32_t start = 0;
+  uint32_t lastPushAll = 0;
+  uint32_t firstMessageAt = 0;
+  uint32_t lastMessageAt = 0;
+  bool receivedAnyPrint = false;
+
+  if (serial.isEmpty() || ip.isEmpty() || accessCode.isEmpty()) {
+    if (errorOut) {
+      *errorOut = "Missing serial, ip, or access code";
+    }
+    return false;
+  }
+
+  if (!ensureWifiConnected()) {
+    if (errorOut) {
+      *errorOut = "WiFi not connected";
+    }
+    return false;
+  }
+
+  mqttNetClient.stop();
+  mqttNetClient.setInsecure();
+  mqttClient.setServer(ip.c_str(), kMqttPort);
+  mqttClient.setCallback(onMqttMessage);
+  mqttClient.setBufferSize(8192);
+  mqttClient.setKeepAlive(15);
+  mqttClient.setSocketTimeout(4);
+
+  mqttExpectedTopic = "device/" + serial + "/report";
+  requestTopic = "device/" + serial + "/request";
+  mqttLastPayload = "";
+  mqttMessageReceived = false;
+
+  if (!mqttClient.connect(serial.c_str(), "bblp", accessCode.c_str())) {
+    if (errorOut) {
+      *errorOut = "MQTT connect failed " + String(mqttClient.state());
+    }
+    return false;
+  }
+
+  if (!mqttClient.subscribe(mqttExpectedTopic.c_str())) {
+    mqttClient.disconnect();
+    if (errorOut) {
+      *errorOut = "MQTT subscribe failed";
+    }
+    return false;
+  }
+
+  start = millis();
+  while (millis() - start < 150) {
+    mqttClient.loop();
+    delay(5);
+  }
+
+  start = millis();
+  lastPushAll = start - kMqttPushallIntervalMs;
+  while (millis() - start < kMqttTimeoutMs) {
+    uint32_t now = millis();
+
+    if (now - lastPushAll >= kMqttPushallIntervalMs) {
+      publishPushAll(requestTopic);
+      lastPushAll = now;
+    }
+
+    mqttClient.loop();
+
+    if (mqttMessageReceived) {
+      mqttMessageReceived = false;
+      if (mergePrintPayload(mergedDoc, mqttLastPayload)) {
+        if (!receivedAnyPrint) {
+          firstMessageAt = now;
+        }
+        receivedAnyPrint = true;
+        lastMessageAt = now;
+      }
+    }
+
+    if (receivedAnyPrint &&
+        (now - firstMessageAt) >= kMqttCollectWindowMs &&
+        (now - lastMessageAt) >= kMqttQuietWindowMs) {
+      break;
+    }
+
+    delay(5);
+  }
+
+  mqttClient.disconnect();
+
+  if (!receivedAnyPrint || !mergedDoc.is<JsonObject>()) {
+    if (errorOut) {
+      *errorOut = "MQTT timeout";
+    }
+    return false;
+  }
+
+  JsonObject print = mergedDoc.as<JsonObject>();
+  if (!hasUsefulPrintData(print)) {
+    if (errorOut) {
+      *errorOut = "MQTT payload missing print data";
+    }
+    return false;
+  }
+
+  if (cacheEntry) {
+    updateCachedPrinterFromPrint(*cacheEntry, print);
+  }
+
+  return true;
+}
+
+void serviceCachedPrinterRefresh() {
+  uint32_t now = millis();
+
+  if (WiFi.status() != WL_CONNECTED) {
+    return;
+  }
+
+  for (size_t offset = 0; offset < kMaxCachedPrinters; ++offset) {
+    size_t index = (nextRefreshIndex + offset) % kMaxCachedPrinters;
+    CachedPrinterState& entry = cachedPrinters[index];
+    String error;
+
+    if (!entry.used || entry.ip.isEmpty() || entry.accessCode.isEmpty()) {
+      continue;
+    }
+
+    if (entry.lastRefreshMs != 0 && (now - entry.lastRefreshMs) < kCacheRefreshIntervalMs) {
+      continue;
+    }
+
+    if (entry.lastAttemptMs != 0 && (now - entry.lastAttemptMs) < 1000U) {
+      continue;
+    }
+
+    entry.lastAttemptMs = now;
+    collectPrinterStatus(entry.serial, entry.ip, entry.accessCode, &entry, &error);
+    nextRefreshIndex = (index + 1U) % kMaxCachedPrinters;
+    break;
+  }
 }
 
 bool connectToWifi(const String& ssid, const String& password, bool persistOnSuccess) {
@@ -269,6 +656,13 @@ void runBambuDiscover() {
     String accessCode = device["dev_access_code"] | "";
     bool online = device["online"] | false;
     String cloudStatus = device["print_status"] | "";
+    CachedPrinterState* entry = ensureCachedPrinter(serial, "", accessCode);
+    if (entry) {
+      entry->name = name;
+      entry->model = model;
+      entry->cloudStatus = cloudStatus;
+      entry->online = online;
+    }
     String line = "PRINTER|";
     line += serial;
     line += "|";
@@ -317,99 +711,47 @@ void runBambuTestProfile() {
 }
 
 void runBambuStatus(const String& serialFilter) {
-  bridgeReply("ERR|BAMBU_STATUS requires serial,ip,access_code");
+  CachedPrinterState* entry = findCachedPrinter(serialFilter);
+
+  if (!entry) {
+    bridgeReply("ERR|Printer not registered");
+    return;
+  }
+
+  if (entry->hasStatus) {
+    emitCachedStatus(*entry);
+    bridgeReply("OK|BAMBU_STATUS|1");
+  } else {
+    bridgeReply("OK|BAMBU_STATUS|0");
+  }
 }
 
 void runBambuStatusLocal(const String& serial, const String& ip, const String& accessCode) {
-  DynamicJsonDocument doc(8192);
-  JsonObject print;
-  String requestTopic;
+  CachedPrinterState* entry = ensureCachedPrinter(serial, ip, accessCode);
   String error;
-  String line;
-  uint32_t start = 0;
+  bool success = false;
+
+  if (!entry) {
+    bridgeReply("ERR|Printer cache full");
+    return;
+  }
 
   if (serial.isEmpty() || ip.isEmpty() || accessCode.isEmpty()) {
     bridgeReply("ERR|Missing serial, ip, or access code");
     return;
   }
 
-  if (!ensureWifiConnected()) {
-    return;
+  entry->lastAttemptMs = millis();
+  success = collectPrinterStatus(serial, ip, accessCode, entry, &error);
+
+  if (entry->hasStatus) {
+      emitCachedStatus(*entry);
+      bridgeReply("OK|BAMBU_STATUS|1");
+  } else if(!success && error.length() > 0) {
+      bridgeReply("ERR|" + sanitizeForBridge(error, 120));
+  } else {
+      bridgeReply("OK|BAMBU_STATUS|0");
   }
-
-  mqttNetClient.stop();
-  mqttNetClient.setInsecure();
-  mqttClient.setServer(ip.c_str(), kMqttPort);
-  mqttClient.setCallback(onMqttMessage);
-  mqttClient.setBufferSize(4096);
-
-  mqttExpectedTopic = "device/" + serial + "/report";
-  requestTopic = "device/" + serial + "/request";
-  mqttLastPayload = "";
-  mqttMessageReceived = false;
-
-  if (!mqttClient.connect(serial.c_str(), "bblp", accessCode.c_str())) {
-    bridgeReply("ERR|MQTT connect failed " + String(mqttClient.state()));
-    return;
-  }
-
-  if (!mqttClient.subscribe(mqttExpectedTopic.c_str())) {
-    mqttClient.disconnect();
-    bridgeReply("ERR|MQTT subscribe failed");
-    return;
-  }
-
-  mqttClient.publish(
-      requestTopic.c_str(),
-      "{\"pushing\":{\"sequence_id\":\"0\",\"command\":\"pushall\"}}");
-
-  start = millis();
-  while (!mqttMessageReceived && millis() - start < kMqttTimeoutMs) {
-    mqttClient.loop();
-    delay(10);
-  }
-
-  mqttClient.disconnect();
-
-  if (!mqttMessageReceived) {
-    bridgeReply("ERR|MQTT timeout");
-    return;
-  }
-
-  DeserializationError jsonError = deserializeJson(doc, mqttLastPayload);
-  if (jsonError) {
-    bridgeReply("ERR|MQTT JSON parse failed");
-    return;
-  }
-
-  if (!doc["print"].is<JsonObject>()) {
-    bridgeReply("ERR|MQTT payload missing print data");
-    return;
-  }
-
-  print = doc["print"].as<JsonObject>();
-  line = "STATUS|";
-  line += serial;
-  line += "|";
-  line += String(print["gcode_state"] | "");
-  line += "|";
-  line += String(print["mc_percent"] | 0);
-  line += "|";
-  line += String(print["layer_num"] | 0);
-  line += "|";
-  line += String(print["total_layer_num"] | 0);
-  line += "|";
-  line += String(print["mc_remaining_time"] | 0);
-  line += "|";
-  line += String(static_cast<float>(print["nozzle_temper"] | 0));
-  line += "|";
-  line += String(static_cast<float>(print["bed_temper"] | 0));
-  line += "|";
-  line += String(print["wifi_signal"] | "");
-  line += "|";
-  line += String(print["gcode_file"] | "");
-  bridgeReply(line);
-  bridgeReply("OK|BAMBU_STATUS|1");
 }
 
 void handleCommand(String line) {
@@ -506,4 +848,5 @@ void loop() {
       bridgeLine += c;
     }
   }
+
 }
