@@ -1,48 +1,45 @@
 # Bambu Cloud Monitor
 
-Terminal dashboards for monitoring one Bambu Lab printer or your entire printer fleet over MQTT on your local network.
+Tools for monitoring Bambu Lab printers from either a desktop terminal or a Flipper Zero + ESP32 bridge.
 
-The main multi-printer workflow uses `monitor_all.py` to discover every printer tied to your bearer token, resolve local IPs, cache the discovered devices in `found_printers.json`, and display a live all-printers dashboard showing current jobs, progress, layers, temperatures, connection state, and file names in one screen. The single-printer workflow uses `monitor.py` to connect directly to one printer, request a full status snapshot, and keep refreshing a focused dashboard with live print telemetry such as progress, layer counts, temperatures, fan speeds, WiFi signal, and the current file name.
+The main desktop workflow uses `monitor_all.py` to discover printers tied to a bearer token, resolve local IPs, cache the result in `found_printers.json`, and display a live fleet dashboard. The Flipper workflow uses the app in [`FlipperApp`](C:\Users\Joe\Projects\Bambu-Cloud-Monitor\FlipperApp) to load a cached printer list from SD, talk to an ESP32 over UART, and request local MQTT status for a selected printer.
+
+`monitor.py` remains the single-printer desktop option when you already know one printer's IP, serial, and access code.
 
 ![Bambu Cloud Monitor All Printers Dashboard](https://raw.githubusercontent.com/jsammarco/Bambu-Cloud-Monitor/refs/heads/main/Images/MonitorAll%20Screenshot.JPG)
 
 ![Bambu Cloud Monitor Dashboard](https://raw.githubusercontent.com/jsammarco/Bambu-Cloud-Monitor/refs/heads/main/Images/Screenshot.JPG)
 
-It also includes a multi-printer mode that can discover every printer on your account, cache the results, and show all active jobs in one console dashboard.
-
 ## Features
 
-- Live terminal dashboard
-- Print progress bar and remaining time
-- Nozzle and bed temperature monitoring
-- Fan speed and WiFi signal display
-- Automatic refresh requests every 5 seconds
-- Helper scripts to retrieve a bearer token and list printer metadata
-- Multi-printer dashboard with cached discovery
-- Local configuration through `.env`
+- Single-printer terminal dashboard with live MQTT telemetry
+- Multi-printer terminal dashboard with cached discovery
+- Bearer-token helper scripts for login and printer lookup
+- Local IP resolution by scanning `8883` and testing MQTT auth
+- Flipper Zero external app with ESP32 bridge support
+- SD-card token and printer-cache loading for the Flipper workflow
+- Local `.env` configuration for the single-printer desktop monitor
 
 ## Requirements
 
 - Python 3
+- `requests`
 - `paho-mqtt`
 - A Bambu Lab printer reachable on your local network
-- Your printer IP address, serial number, and access code
+- For Flipper mode: Flipper Zero, supported ESP32 Wi-Fi module, and a Flipper firmware checkout for building the `.fap`
 
-## Setup
-
-1. Install the dependencies:
+## Install
 
 ```bash
 pip install -r requirements.txt
 ```
 
-2. Copy the sample config:
+## Desktop Setup
 
-```bash
-copy sample.env .env
-```
+For the single-printer monitor:
 
-3. Edit `.env` and fill in your printer details:
+1. Copy [`sample.env`](C:\Users\Joe\Projects\Bambu-Cloud-Monitor\sample.env) to `.env`
+2. Fill in:
 
 ```env
 PRINTER_IP=192.168.50.162
@@ -50,203 +47,137 @@ SERIAL=YOUR_PRINTER_SERIAL
 ACCESS_CODE=YOUR_ACCESS_CODE
 ```
 
-## Get Your Token And Printer Details
-
-If you do not already have the values needed for `.env`, use the helper scripts in this repository.
+## Get Token And Printers
 
 ### 1. Get a bearer token
-
-Run:
 
 ```bash
 python login.py
 ```
 
-`login.py` authenticates with Bambu Lab and obtains a bearer token. It can also save the token locally, depending on how your local `bambulab` library is configured.
-
-### 2. Query your printers
-
-Run:
+### 2. Query printers on the account
 
 ```bash
 python query.py [BEARER_TOKEN]
 ```
 
-This queries the Bambu Cloud API and lists the printers on your account. The current script outputs:
+This returns printer metadata including:
 
-- printer name
+- name
 - serial number
-- model information
 - access code
+- model
 - online state
-- print status
+- cloud print status
 
-The two values most useful for `monitor.py` are:
-
-- `Serial Number` -> `SERIAL`
-- `Access Code` -> `ACCESS_CODE`
-
-### 3. Get the printer IP
-
-`query.py` now includes a best-effort local IP discovery mode. It scans your local subnet for hosts with port `8883` open, then tries the same local MQTT authentication used by `monitor.py` to match each printer's access code.
-
-Run:
+### 3. Resolve local printer IPs
 
 ```bash
 python query.py [BEARER_TOKEN] --resolve-ip
 ```
 
-If you want to limit the scan to a known subnet, use:
+Useful variants:
 
-```bash
-python query.py [BEARER_TOKEN] --resolve-ip --subnet 192.168.50.0/24
-```
+- `python query.py [BEARER_TOKEN] --resolve-ip --subnet 192.168.50.0/24`
+- `python query.py [BEARER_TOKEN] --resolve-ip --debug-ip --subnet 192.168.50.0/24`
 
-For step-by-step discovery logs, add `--debug-ip`:
+When successful, the script prints `Local IP` for each matched printer.
 
-```bash
-python query.py [BEARER_TOKEN] --resolve-ip --debug-ip --subnet 192.168.50.0/24
-```
+## Desktop Usage
 
-When discovery succeeds, `query.py` will print a `Local IP` line for each device.
-
-Example output:
-
-```text
-================================================================================
-Bambu Lab Printer Information Query
-================================================================================
-
-Fetching device list...
-Scanning 254 host(s) for port 8883...
-MQTT candidate host(s): 192.168.50.27, 192.168.50.162, 192.168.50.165
-Resolving local IP for Example Printer (01XXXXXXXXXXXXX)...
-  Trying 3 candidate host(s) for Example Printer...
-    Testing 192.168.50.27...
-    No match at 192.168.50.27
-    Testing 192.168.50.162...
-    Matched Example Printer -> 192.168.50.162
-
-Found 1 device(s):
-
-================================================================================
-Device: Example Printer
-================================================================================
-  Serial Number:  01XXXXXXXXXXXXX
-  Model:          P1S (C12)
-  Structure:      CoreXY
-  Nozzle Size:    0.4mm
-  Access Code:    ********
-  Online:         Yes
-  Print Status:   RUNNING
-  Local IP:       192.168.50.162
-================================================================================
-```
-
-This is still best-effort. If the printer is on another VLAN, asleep, blocked by firewall rules, or your network is not a `/24`, auto-discovery may miss it.
-
-Common ways to find it:
-
-- check your router or DHCP client list
-- check the printer's network settings from the device itself
-- use your router app or web interface to match the printer by hostname or MAC address
-
-Once you have the IP, place it in:
-
-```env
-PRINTER_IP=192.168.50.162
-```
-
-Then combine the IP with the serial number and access code returned by `query.py`.
-
-## Usage
-
-Run the monitor with:
+### Single printer
 
 ```bash
 python monitor.py
 ```
 
-The script will:
+This connects to the printer over TLS MQTT on port `8883`, subscribes to `device/<serial>/report`, sends `pushall` to `device/<serial>/request`, and redraws the terminal dashboard when new telemetry arrives.
 
-- connect to the printer over TLS on port `8883`
-- subscribe to `device/<serial>/report`
-- publish a `pushall` request to `device/<serial>/request`
-- redraw the dashboard whenever new status data arrives
+### All printers
 
-## Monitor All Printers
-
-Use `monitor_all.py` to discover all printers tied to your bearer token, cache the results, and open one combined dashboard for every resolved device.
-
-First run with rediscovery:
+First run with discovery:
 
 ```bash
 python monitor_all.py [BEARER_TOKEN] --rediscover --subnet 192.168.50.0/24
 ```
 
-Later runs can reuse the cached discovery file:
+Later runs can reuse the cache:
 
 ```bash
 python monitor_all.py [BEARER_TOKEN]
 ```
 
-To force a refresh of `found_printers.json`, pass `--rediscover` again.
-
 Useful flags:
 
-- `--rediscover`: rebuild the printer cache
-- `--subnet 192.168.50.0/24`: narrow the discovery scan
-- `--debug-ip`: print detailed discovery logs instead of progress bars
-- `--cache-file custom_found_printers.json`: use a different cache file
+- `--rediscover`
+- `--subnet 192.168.50.0/24`
+- `--debug-ip`
+- `--cache-file custom_found_printers.json`
 
-`monitor_all.py` stores discovery results in `found_printers.json` so restarting the app does not require a fresh scan every time.
+`monitor_all.py` stores discovered printers in `found_printers.json`. That file is intentionally local-only and ignored by git.
 
-## Environment Variables
+## Flipper Zero Workflow
 
-The project reads configuration from `.env` or your process environment:
+The Flipper companion app lives in [`FlipperApp`](C:\Users\Joe\Projects\Bambu-Cloud-Monitor\FlipperApp).
 
-- `PRINTER_IP`: local IP address of the printer
-- `SERIAL`: printer serial number used in MQTT topics
-- `ACCESS_CODE`: printer access code used for MQTT authentication
+Current design:
 
-If any of these are missing, `monitor.py` raises a startup error explaining how to create `.env`.
+- Flipper handles the UI
+- ESP32 handles Wi‑Fi and local MQTT
+- Flipper and ESP32 communicate over UART at `115200`
+
+Recommended asset paths on the Flipper SD card:
+
+- `/ext/apps_assets/bambu_fleet/bambu_token.txt`
+- `/ext/apps_assets/bambu_fleet/found_printers.json`
+
+Current practical flow:
+
+1. Build and install the `.fap`
+2. Flash the ESP32 sketch
+3. Copy `bambu_token.txt` and `found_printers.json` to `/ext/apps_assets/bambu_fleet`
+4. Connect Wi‑Fi from the Flipper app
+5. Load printers from SD and open a printer detail page
+
+Important note:
+
+- The Flipper/ESP32 work is still in active iteration
+- local MQTT status is partially working, but reliability varies by printer and timing
+- the desktop Python tools are the most reliable monitoring path today
+
+See [`FlipperApp/README.md`](C:\Users\Joe\Projects\Bambu-Cloud-Monitor\FlipperApp\README.md) for the current Flipper-specific details.
 
 ## Project Files
 
-- [`login.py`](C:\Users\Joe\Projects\Bambu-Cloud-Monitor\login.py): gets a bearer token through the Bambu authentication flow
-- [`monitor.py`](C:\Users\Joe\Projects\Bambu-Cloud-Monitor\monitor.py): the main MQTT dashboard script
-- [`monitor_all.py`](C:\Users\Joe\Projects\Bambu-Cloud-Monitor\monitor_all.py): discovers, caches, and monitors all printers in one dashboard
-- [`query.py`](C:\Users\Joe\Projects\Bambu-Cloud-Monitor\query.py): lists printers, shows serial numbers and access codes, and can attempt local IP discovery
-- [`requirements.txt`](C:\Users\Joe\Projects\Bambu-Cloud-Monitor\requirements.txt): Python dependencies for the project
+- [`login.py`](C:\Users\Joe\Projects\Bambu-Cloud-Monitor\login.py): gets a bearer token
+- [`query.py`](C:\Users\Joe\Projects\Bambu-Cloud-Monitor\query.py): lists printers and can resolve local IPs
+- [`monitor.py`](C:\Users\Joe\Projects\Bambu-Cloud-Monitor\monitor.py): single-printer desktop dashboard
+- [`monitor_all.py`](C:\Users\Joe\Projects\Bambu-Cloud-Monitor\monitor_all.py): fleet discovery and monitoring dashboard
+- [`requirements.txt`](C:\Users\Joe\Projects\Bambu-Cloud-Monitor\requirements.txt): Python dependencies
 - [`sample.env`](C:\Users\Joe\Projects\Bambu-Cloud-Monitor\sample.env): example environment file
-- [`Images/MonitorAll Screenshot.JPG`](<C:\Users\Joe\Projects\Bambu-Cloud-Monitor\Images\MonitorAll Screenshot.JPG>): multi-printer dashboard screenshot
-- [`Images/Screenshot.JPG`](C:\Users\Joe\Projects\Bambu-Cloud-Monitor\Images\Screenshot.JPG): example dashboard screenshot
+- [`FlipperApp`](C:\Users\Joe\Projects\Bambu-Cloud-Monitor\FlipperApp): Flipper Zero app and ESP32 bridge
 
 ## Research Notes
 
-This monitor was informed by the Bambu Lab protocol research documented in [`coelacant1/Bambu-Lab-Cloud-API`](https://github.com/coelacant1/Bambu-Lab-Cloud-API).
-
-In particular, this project follows the MQTT topic pattern and status request behavior documented in:
+This project was informed by the protocol research in [`coelacant1/Bambu-Lab-Cloud-API`](https://github.com/coelacant1/Bambu-Lab-Cloud-API), especially:
 
 - [`README.md`](https://github.com/coelacant1/Bambu-Lab-Cloud-API/blob/main/README.md)
 - [`API_INDEX.md`](https://github.com/coelacant1/Bambu-Lab-Cloud-API/blob/main/API_INDEX.md)
 - [`API_MQTT.md`](https://github.com/coelacant1/Bambu-Lab-Cloud-API/blob/main/API_MQTT.md)
 
-Relevant details from that research include:
+Relevant pieces used here:
 
-- Bambu printers use MQTT over TLS on port `8883`
-- printer updates are exposed on `device/<device_serial>/report`
-- commands are published to `device/<device_serial>/request`
-- the `pushall` request returns a full status payload
-- common print fields include `mc_percent`, `layer_num`, `total_layer_num`, `mc_remaining_time`, `gcode_state`, `nozzle_temper`, `bed_temper`, and `wifi_signal`
-
-This repository does not bundle or reimplement the upstream library. It uses the documented MQTT behavior to build a small local monitoring dashboard.
+- MQTT over TLS on port `8883`
+- `device/<serial>/report`
+- `device/<serial>/request`
+- `pushall`
+- status fields such as `mc_percent`, `layer_num`, `total_layer_num`, `mc_remaining_time`, `gcode_state`, `nozzle_temper`, `bed_temper`, and `wifi_signal`
 
 ## Disclaimer
 
 This project is not affiliated with or endorsed by Bambu Lab.
 
-Use it at your own risk and only with hardware and credentials you control.
+Use it only with hardware, networks, and credentials you control.
 
 ## License
 
