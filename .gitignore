@@ -140,6 +140,7 @@ celerybeat.pid
 !.sample.env
 !sample.env
 found_printers.json
+bambu_token.txt
 .envrc
 .venv
 env/

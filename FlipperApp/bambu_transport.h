@@ -13,6 +13,12 @@
 typedef struct BambuTransport BambuTransport;
 
 typedef struct {
+    char ssid[BAMBU_MONITOR_WIFI_SSID_SIZE];
+    int16_t rssi;
+    bool secure;
+} BambuWifiNetworkInfo;
+
+typedef struct {
     char serial[BAMBU_MONITOR_SERIAL_SIZE];
     char name[BAMBU_MONITOR_NAME_SIZE];
     char model[BAMBU_MONITOR_MODEL_SIZE];
@@ -38,6 +44,11 @@ typedef struct {
     void (*deinit)(BambuTransport* transport);
     bool (*ping_bridge)(BambuTransport* transport);
     bool (*scan_wifi)(BambuTransport* transport);
+    bool (*wifi_connect)(BambuTransport* transport, const char* ssid, const char* password);
+    bool (*wifi_reconnect)(BambuTransport* transport);
+    bool (*wifi_status)(BambuTransport* transport);
+    bool (*set_token)(BambuTransport* transport, const char* token);
+    bool (*test_cloud_profile)(BambuTransport* transport);
     bool (*discover_printers)(BambuTransport* transport);
     bool (*refresh_status)(BambuTransport* transport, const char* serial);
     bool (*is_ready)(const BambuTransport* transport);
@@ -47,14 +58,17 @@ struct BambuTransport {
     const BambuTransportOps* ops;
     bool initialized;
     bool bridge_ready;
+    char wifi_status[BAMBU_MONITOR_STATUS_TEXT_SIZE];
+    char wifi_ssid[BAMBU_MONITOR_WIFI_SSID_SIZE];
+    char wifi_ip[BAMBU_MONITOR_IP_SIZE];
     char last_response[BAMBU_MONITOR_DETAIL_TEXT_SIZE];
-    char wifi_networks[BAMBU_MONITOR_MAX_WIFI_NETWORKS][BAMBU_MONITOR_WIFI_ENTRY_SIZE];
+    BambuWifiNetworkInfo wifi_networks[BAMBU_MONITOR_MAX_WIFI_NETWORKS];
     size_t wifi_network_count;
     BambuPrinterInfo printers[BAMBU_MONITOR_MAX_PRINTERS];
     size_t printer_count;
     FuriHalSerialHandle* serial_handle;
     FuriStreamBuffer* rx_stream;
-    char tx_line_buffer[320];
+    char tx_line_buffer[512];
 };
 
 const BambuTransportOps* bambu_transport_live_ops(void);
@@ -84,6 +98,34 @@ static inline bool bambu_transport_ping_bridge(BambuTransport* transport) {
 static inline bool bambu_transport_scan_wifi(BambuTransport* transport) {
     return transport && transport->ops && transport->ops->scan_wifi &&
            transport->ops->scan_wifi(transport);
+}
+
+static inline bool bambu_transport_wifi_connect(
+    BambuTransport* transport,
+    const char* ssid,
+    const char* password) {
+    return transport && transport->ops && transport->ops->wifi_connect &&
+           transport->ops->wifi_connect(transport, ssid, password);
+}
+
+static inline bool bambu_transport_wifi_reconnect(BambuTransport* transport) {
+    return transport && transport->ops && transport->ops->wifi_reconnect &&
+           transport->ops->wifi_reconnect(transport);
+}
+
+static inline bool bambu_transport_wifi_status(BambuTransport* transport) {
+    return transport && transport->ops && transport->ops->wifi_status &&
+           transport->ops->wifi_status(transport);
+}
+
+static inline bool bambu_transport_set_token(BambuTransport* transport, const char* token) {
+    return transport && transport->ops && transport->ops->set_token &&
+           transport->ops->set_token(transport, token);
+}
+
+static inline bool bambu_transport_test_cloud_profile(BambuTransport* transport) {
+    return transport && transport->ops && transport->ops->test_cloud_profile &&
+           transport->ops->test_cloud_profile(transport);
 }
 
 static inline bool bambu_transport_discover_printers(BambuTransport* transport) {

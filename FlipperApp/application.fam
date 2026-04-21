@@ -17,6 +17,7 @@ App(
         "gui",
         "dialogs",
         "notification",
+        "storage",
     ],
     targets=[
         "f7",

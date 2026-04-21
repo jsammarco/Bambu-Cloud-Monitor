@@ -1,11 +1,12 @@
 #include "bambu_transport.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define BAMBU_BRIDGE_BAUDRATE 115200U
 #define BAMBU_BRIDGE_RX_STREAM_SIZE 1024U
-#define BAMBU_BRIDGE_LINE_SIZE 256U
+#define BAMBU_BRIDGE_LINE_SIZE 512U
 #define BAMBU_BRIDGE_DEFAULT_TIMEOUT_MS 15000U
 #define BAMBU_BRIDGE_PING_TIMEOUT_MS 1000U
 
@@ -163,14 +164,36 @@ static void bambu_bridge_handle_wifi_line(BambuTransport* transport, const char*
     if(sscanf(line, "WIFI|%33[^|]|%d|%15s", ssid, &rssi, encryption) >= 2) {
         snprintf(summary, sizeof(summary), "%.24s %ddBm", ssid, rssi);
         if(transport->wifi_network_count < BAMBU_MONITOR_MAX_WIFI_NETWORKS) {
-            snprintf(
-                transport->wifi_networks[transport->wifi_network_count],
-                BAMBU_MONITOR_WIFI_ENTRY_SIZE,
-                "%s",
-                summary);
+            BambuWifiNetworkInfo* info = &transport->wifi_networks[transport->wifi_network_count];
+            memset(info, 0, sizeof(BambuWifiNetworkInfo));
+            snprintf(info->ssid, sizeof(info->ssid), "%s", ssid);
+            info->rssi = (int16_t)rssi;
+            info->secure = strcmp(encryption, "open") != 0;
             transport->wifi_network_count++;
         }
         bambu_bridge_set_response(transport, summary);
+    }
+}
+
+static void bambu_bridge_handle_wifi_status_line(BambuTransport* transport, const char* line) {
+    int status = 0;
+    char ssid[BAMBU_MONITOR_WIFI_SSID_SIZE];
+    char ip[BAMBU_MONITOR_IP_SIZE];
+
+    if(!transport || !line || strncmp(line, "OK|WIFI_STATUS|", 15) != 0) {
+        return;
+    }
+
+    memset(ssid, 0, sizeof(ssid));
+    memset(ip, 0, sizeof(ip));
+    if(sscanf(line, "OK|WIFI_STATUS|%d|%33[^|]|%15s", &status, ssid, ip) >= 1) {
+        snprintf(transport->wifi_status, sizeof(transport->wifi_status), "%d", status);
+        if(ssid[0]) {
+            snprintf(transport->wifi_ssid, sizeof(transport->wifi_ssid), "%s", ssid);
+        }
+        if(ip[0]) {
+            snprintf(transport->wifi_ip, sizeof(transport->wifi_ip), "%s", ip);
+        }
     }
 }
 
@@ -291,6 +314,13 @@ static bool bambu_bridge_wait_for_result(
         if(strncmp(line, "OK|", 3) == 0) {
             if(strcmp(line, "OK|PONG") == 0) {
                 bambu_bridge_set_response(transport, "Bridge online");
+            } else if(strncmp(line, "OK|WIFI_STATUS|", 15) == 0) {
+                bambu_bridge_handle_wifi_status_line(transport, line);
+                if(transport->wifi_ssid[0]) {
+                    bambu_bridge_set_response(transport, transport->wifi_ssid);
+                } else {
+                    bambu_bridge_set_response(transport, "WiFi status updated");
+                }
             } else if(strncmp(line, "OK|", 3) == 0 && transport->last_response[0] == '\0') {
                 bambu_bridge_set_response(transport, line + 3);
             }
@@ -417,6 +447,103 @@ static bool bambu_transport_live_scan_wifi(BambuTransport* transport) {
         bambu_bridge_handle_wifi_line);
 }
 
+static bool bambu_transport_live_wifi_connect(
+    BambuTransport* transport,
+    const char* ssid,
+    const char* password) {
+    size_t offset = 0;
+
+    if(!transport || !transport->initialized || !ssid || !ssid[0] ||
+       !bambu_bridge_ensure_ready(transport)) {
+        return false;
+    }
+
+    memset(transport->tx_line_buffer, 0, sizeof(transport->tx_line_buffer));
+    offset = (size_t)snprintf(
+        transport->tx_line_buffer,
+        sizeof(transport->tx_line_buffer),
+        "WIFI_CONNECT|%s|",
+        ssid);
+    if(password && password[0] && offset < sizeof(transport->tx_line_buffer)) {
+        snprintf(
+            transport->tx_line_buffer + offset,
+            sizeof(transport->tx_line_buffer) - offset,
+            "%s",
+            password);
+    }
+
+    bambu_bridge_set_response(transport, "");
+    bambu_bridge_flush_rx(transport);
+    bambu_bridge_send_command(transport, transport->tx_line_buffer);
+    return bambu_bridge_wait_for_result(
+        transport,
+        BAMBU_BRIDGE_DEFAULT_TIMEOUT_MS,
+        NULL);
+}
+
+static bool bambu_transport_live_wifi_reconnect(BambuTransport* transport) {
+    if(!transport || !transport->initialized || !bambu_bridge_ensure_ready(transport)) {
+        return false;
+    }
+
+    bambu_bridge_set_response(transport, "");
+    bambu_bridge_flush_rx(transport);
+    bambu_bridge_send_command(transport, "WIFI_RECONNECT");
+    return bambu_bridge_wait_for_result(
+        transport,
+        BAMBU_BRIDGE_DEFAULT_TIMEOUT_MS,
+        NULL);
+}
+
+static bool bambu_transport_live_wifi_status(BambuTransport* transport) {
+    if(!transport || !transport->initialized || !bambu_bridge_ensure_ready(transport)) {
+        return false;
+    }
+
+    bambu_bridge_set_response(transport, "");
+    bambu_bridge_flush_rx(transport);
+    bambu_bridge_send_command(transport, "WIFI_STATUS");
+    return bambu_bridge_wait_for_result(
+        transport,
+        BAMBU_BRIDGE_DEFAULT_TIMEOUT_MS,
+        NULL);
+}
+
+static bool bambu_transport_live_set_token(BambuTransport* transport, const char* token) {
+    if(!transport || !transport->initialized || !token || !token[0] ||
+       !bambu_bridge_ensure_ready(transport)) {
+        return false;
+    }
+
+    memset(transport->tx_line_buffer, 0, sizeof(transport->tx_line_buffer));
+    snprintf(
+        transport->tx_line_buffer,
+        sizeof(transport->tx_line_buffer),
+        "BAMBU_SET_TOKEN|%s",
+        token);
+    bambu_bridge_set_response(transport, "");
+    bambu_bridge_flush_rx(transport);
+    bambu_bridge_send_command(transport, transport->tx_line_buffer);
+    return bambu_bridge_wait_for_result(
+        transport,
+        BAMBU_BRIDGE_DEFAULT_TIMEOUT_MS,
+        NULL);
+}
+
+static bool bambu_transport_live_test_cloud_profile(BambuTransport* transport) {
+    if(!transport || !transport->initialized || !bambu_bridge_ensure_ready(transport)) {
+        return false;
+    }
+
+    bambu_bridge_set_response(transport, "");
+    bambu_bridge_flush_rx(transport);
+    bambu_bridge_send_command(transport, "BAMBU_TEST_PROFILE");
+    return bambu_bridge_wait_for_result(
+        transport,
+        BAMBU_BRIDGE_DEFAULT_TIMEOUT_MS,
+        NULL);
+}
+
 static bool bambu_transport_live_discover_printers(BambuTransport* transport) {
     if(!transport || !transport->initialized || !bambu_bridge_ensure_ready(transport)) {
         return false;
@@ -434,14 +561,35 @@ static bool bambu_transport_live_discover_printers(BambuTransport* transport) {
 }
 
 static bool bambu_transport_live_refresh_status(BambuTransport* transport, const char* serial) {
+    BambuPrinterInfo* printer = NULL;
+    size_t index = 0;
+
     if(!transport || !transport->initialized || !serial || !serial[0] ||
        !bambu_bridge_ensure_ready(transport)) {
         return false;
     }
 
+    for(index = 0; index < transport->printer_count; index++) {
+        if(strcmp(transport->printers[index].serial, serial) == 0) {
+            printer = &transport->printers[index];
+            break;
+        }
+    }
+
+    if(!printer || !printer->ip[0] || !printer->access_code[0]) {
+        bambu_bridge_set_response(transport, "Missing IP or access code");
+        return false;
+    }
+
     bambu_bridge_set_response(transport, "");
     bambu_bridge_flush_rx(transport);
-    snprintf(transport->tx_line_buffer, sizeof(transport->tx_line_buffer), "BAMBU_STATUS|%s", serial);
+    snprintf(
+        transport->tx_line_buffer,
+        sizeof(transport->tx_line_buffer),
+        "BAMBU_STATUS|%s|%s|%s",
+        serial,
+        printer->ip,
+        printer->access_code);
     bambu_bridge_send_command(transport, transport->tx_line_buffer);
     return bambu_bridge_wait_for_result(
         transport,
@@ -459,6 +607,11 @@ static const BambuTransportOps bambu_transport_live_instance = {
     .deinit = bambu_transport_live_deinit,
     .ping_bridge = bambu_transport_live_ping_bridge,
     .scan_wifi = bambu_transport_live_scan_wifi,
+    .wifi_connect = bambu_transport_live_wifi_connect,
+    .wifi_reconnect = bambu_transport_live_wifi_reconnect,
+    .wifi_status = bambu_transport_live_wifi_status,
+    .set_token = bambu_transport_live_set_token,
+    .test_cloud_profile = bambu_transport_live_test_cloud_profile,
     .discover_printers = bambu_transport_live_discover_printers,
     .refresh_status = bambu_transport_live_refresh_status,
     .is_ready = bambu_transport_live_is_ready,

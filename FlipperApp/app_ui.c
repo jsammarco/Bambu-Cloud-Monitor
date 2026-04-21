@@ -6,14 +6,19 @@
 static const char* const bambu_main_menu_items[] = {
     "Ping Bridge",
     "WiFi Scan",
+    "Connect Last WiFi",
+    "Connect Selected WiFi",
+    "Load Token from SD",
+    "Test Cloud API",
     "Discover Printers",
+    "Load Printers from SD",
     "Printer List",
     "Refresh Selected",
     "About",
 };
 
-#define BAMBU_WIFI_VISIBLE_ITEMS 5U
-#define BAMBU_PRINTER_VISIBLE_ITEMS 5U
+#define BAMBU_WIFI_VISIBLE_ITEMS 4U
+#define BAMBU_PRINTER_VISIBLE_ITEMS 4U
 
 static size_t bambu_ui_main_menu_count(void) {
     return sizeof(bambu_main_menu_items) / sizeof(bambu_main_menu_items[0]);
@@ -28,8 +33,9 @@ static void bambu_ui_draw_header(Canvas* canvas, const BambuMonitorApp* app) {
     canvas_set_font(canvas, FontPrimary);
     canvas_draw_str(canvas, 0, 12, BAMBU_MONITOR_APP_NAME);
     canvas_set_font(canvas, FontSecondary);
-    canvas_draw_str(canvas, 82, 12, bambu_monitor_app_connection_label(app));
-    bambu_ui_draw_line(canvas, 24, app->status_line);
+    canvas_draw_str(canvas, 72, 12, bambu_monitor_app_connection_label(app));
+    bambu_ui_draw_line(canvas, 22, app->status_line);
+    bambu_ui_draw_line(canvas, 30, app->detail_line);
 }
 
 static void bambu_ui_draw_main_menu(Canvas* canvas, BambuMonitorApp* app) {
@@ -42,7 +48,7 @@ static void bambu_ui_draw_main_menu(Canvas* canvas, BambuMonitorApp* app) {
     for(size_t i = 0; i < BAMBU_MONITOR_MENU_VISIBLE_ITEMS; i++) {
         size_t item_index = first_visible + i;
         char line[BAMBU_MONITOR_STATUS_TEXT_SIZE];
-        uint8_t y = 36 + (uint8_t)(i * 8U);
+        uint8_t y = 38 + (uint8_t)(i * 8U);
 
         if(item_index >= bambu_ui_main_menu_count()) {
             break;
@@ -61,11 +67,11 @@ static void bambu_ui_draw_main_menu(Canvas* canvas, BambuMonitorApp* app) {
 static void bambu_ui_draw_busy(Canvas* canvas, BambuMonitorApp* app) {
     canvas_clear(canvas);
     canvas_set_font(canvas, FontPrimary);
-    bambu_ui_draw_line(canvas, 16, app->status_line);
+    bambu_ui_draw_line(canvas, 14, app->status_line);
     canvas_set_font(canvas, FontSecondary);
-    bambu_ui_draw_line(canvas, 30, app->detail_line);
-    bambu_ui_draw_line(canvas, 44, "Bridge action in progress");
-    bambu_ui_draw_line(canvas, 54, "Please wait...");
+    bambu_ui_draw_line(canvas, 26, app->detail_line);
+    bambu_ui_draw_line(canvas, 42, "Bridge action in progress");
+    bambu_ui_draw_line(canvas, 52, "Please wait...");
 }
 
 static void bambu_ui_draw_wifi_results(Canvas* canvas, BambuMonitorApp* app) {
@@ -75,7 +81,7 @@ static void bambu_ui_draw_wifi_results(Canvas* canvas, BambuMonitorApp* app) {
     canvas_set_font(canvas, FontPrimary);
     bambu_ui_draw_line(canvas, 12, "WiFi Results");
     canvas_set_font(canvas, FontSecondary);
-    bambu_ui_draw_line(canvas, 22, "Up/Down scroll  Back done");
+    bambu_ui_draw_line(canvas, 22, "OK connect  Back done");
 
     if(app->wifi_results_index >= BAMBU_WIFI_VISIBLE_ITEMS) {
         first_visible = app->wifi_results_index - (BAMBU_WIFI_VISIBLE_ITEMS - 1U);
@@ -88,19 +94,22 @@ static void bambu_ui_draw_wifi_results(Canvas* canvas, BambuMonitorApp* app) {
 
     for(size_t i = 0; i < BAMBU_WIFI_VISIBLE_ITEMS; i++) {
         size_t item_index = first_visible + i;
-        char line[BAMBU_MONITOR_WIFI_ENTRY_SIZE + 4U];
-        uint8_t y = 34 + (uint8_t)(i * 8U);
+        char line[BAMBU_MONITOR_WIFI_ENTRY_SIZE + 8U];
+        uint8_t y = 32 + (uint8_t)(i * 8U);
+        const BambuWifiNetworkInfo* info = NULL;
 
         if(item_index >= app->transport.wifi_network_count) {
             break;
         }
 
+        info = &app->transport.wifi_networks[item_index];
         snprintf(
             line,
             sizeof(line),
-            "%c %s",
+            "%c %.20s %c",
             (item_index == app->wifi_results_index) ? '>' : ' ',
-            app->transport.wifi_networks[item_index]);
+            info->ssid,
+            info->secure ? '*' : ' ');
         bambu_ui_draw_line(canvas, y, line);
     }
 }
@@ -126,7 +135,7 @@ static void bambu_ui_draw_printer_list(Canvas* canvas, BambuMonitorApp* app) {
     for(size_t i = 0; i < BAMBU_PRINTER_VISIBLE_ITEMS; i++) {
         size_t item_index = first_visible + i;
         char line[BAMBU_MONITOR_NAME_SIZE + 8U];
-        uint8_t y = 34 + (uint8_t)(i * 8U);
+        uint8_t y = 32 + (uint8_t)(i * 8U);
 
         if(item_index >= app->transport.printer_count) {
             break;
@@ -135,7 +144,7 @@ static void bambu_ui_draw_printer_list(Canvas* canvas, BambuMonitorApp* app) {
         snprintf(
             line,
             sizeof(line),
-            "%c %.22s",
+            "%c %.20s",
             (item_index == app->printer_index) ? '>' : ' ',
             app->transport.printers[item_index].name);
         bambu_ui_draw_line(canvas, y, line);
@@ -150,7 +159,7 @@ static void bambu_ui_draw_printer_detail(Canvas* canvas, BambuMonitorApp* app) {
     canvas_set_font(canvas, FontPrimary);
     bambu_ui_draw_line(canvas, 12, "Printer Detail");
     canvas_set_font(canvas, FontSecondary);
-    bambu_ui_draw_line(canvas, 22, "OK refresh  Back list");
+    bambu_ui_draw_line(canvas, 22, "Up/OK refresh L/R nav");
 
     if(!printer) {
         bambu_ui_draw_line(canvas, 38, "No printer selected");
@@ -159,14 +168,26 @@ static void bambu_ui_draw_printer_detail(Canvas* canvas, BambuMonitorApp* app) {
 
     snprintf(line, sizeof(line), "Name: %.18s", printer->name);
     bambu_ui_draw_line(canvas, 32, line);
-    snprintf(line, sizeof(line), "IP: %s", printer->ip[0] ? printer->ip : "?");
+    snprintf(line, sizeof(line), "IP: %s", printer->ip[0] ? printer->ip : "??");
     bambu_ui_draw_line(canvas, 40, line);
-    snprintf(line, sizeof(line), "State: %.16s", printer->state[0] ? printer->state : printer->cloud_status);
+    snprintf(
+        line,
+        sizeof(line),
+        "State: %.16s",
+        printer->has_status ? (printer->state[0] ? printer->state : "??") : "??");
     bambu_ui_draw_line(canvas, 48, line);
-    snprintf(line, sizeof(line), "Job: %u%% L%u/%u", printer->progress, printer->layer, printer->total_layers);
+    if(printer->has_status) {
+        snprintf(
+            line,
+            sizeof(line),
+            "Job: %u%% L%u/%u",
+            printer->progress,
+            printer->layer,
+            printer->total_layers);
+    } else {
+        snprintf(line, sizeof(line), "Job: %s L%s/%s", "??", "??", "??");
+    }
     bambu_ui_draw_line(canvas, 56, line);
-    snprintf(line, sizeof(line), "N %.1f  B %.1f", (double)printer->nozzle_temp, (double)printer->bed_temp);
-    bambu_ui_draw_line(canvas, 64, line);
 }
 
 static void bambu_ui_draw_about(Canvas* canvas) {
@@ -174,10 +195,10 @@ static void bambu_ui_draw_about(Canvas* canvas) {
     canvas_set_font(canvas, FontPrimary);
     bambu_ui_draw_line(canvas, 12, "Bambu Fleet");
     canvas_set_font(canvas, FontSecondary);
-    bambu_ui_draw_line(canvas, 26, "Flipper UI + ESP32 bridge");
-    bambu_ui_draw_line(canvas, 36, "UART on pins 13/14");
-    bambu_ui_draw_line(canvas, 46, "Bridge handles WiFi/API");
-    bambu_ui_draw_line(canvas, 56, "Scaffold for Bambu fleet");
+    bambu_ui_draw_line(canvas, 24, "Multi-printer dashboard");
+    bambu_ui_draw_line(canvas, 34, "ESP32 bridge for WiFi,");
+    bambu_ui_draw_line(canvas, 42, "cloud API, and status");
+    bambu_ui_draw_line(canvas, 54, "ConsultingJoe.com");
 }
 
 void app_ui_draw(Canvas* canvas, BambuMonitorApp* app) {
@@ -237,15 +258,30 @@ static void bambu_ui_handle_main_menu(BambuMonitorApp* app, const InputEvent* in
             bambu_monitor_app_queue_scan_wifi(app);
             break;
         case 2:
-            bambu_monitor_app_queue_discover(app);
+            bambu_monitor_app_queue_wifi_reconnect(app);
             break;
         case 3:
-            app->screen = BambuMonitorScreenPrinterList;
+            bambu_monitor_app_queue_connect_selected_wifi(app);
             break;
         case 4:
-            bambu_monitor_app_queue_refresh_selected(app);
+            bambu_monitor_app_prompt_token_file(app);
             break;
         case 5:
+            bambu_monitor_app_queue_test_cloud_api(app);
+            break;
+        case 6:
+            bambu_monitor_app_queue_discover(app);
+            break;
+        case 7:
+            bambu_monitor_app_prompt_printer_cache_file(app);
+            break;
+        case 8:
+            app->screen = BambuMonitorScreenPrinterList;
+            break;
+        case 9:
+            bambu_monitor_app_queue_refresh_selected(app);
+            break;
+        case 10:
             app->screen = BambuMonitorScreenAbout;
             break;
         default:
@@ -273,6 +309,8 @@ static void bambu_ui_handle_wifi_results(BambuMonitorApp* app, const InputEvent*
         }
         break;
     case InputKeyOk:
+        bambu_monitor_app_queue_connect_selected_wifi(app);
+        break;
     case InputKeyBack:
         app->screen = BambuMonitorScreenMainMenu;
         break;
@@ -306,6 +344,7 @@ static void bambu_ui_handle_printer_list(BambuMonitorApp* app, const InputEvent*
 
 static void bambu_ui_handle_printer_detail(BambuMonitorApp* app, const InputEvent* input_event) {
     switch(input_event->key) {
+    case InputKeyUp:
     case InputKeyOk:
         bambu_monitor_app_queue_refresh_selected(app);
         break;
