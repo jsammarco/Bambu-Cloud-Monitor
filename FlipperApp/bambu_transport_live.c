@@ -9,6 +9,7 @@
 #define BAMBU_BRIDGE_LINE_SIZE 1024U
 #define BAMBU_BRIDGE_DEFAULT_TIMEOUT_MS 15000U
 #define BAMBU_BRIDGE_PING_TIMEOUT_MS 1000U
+#define BAMBU_BRIDGE_DISCOVER_TIMEOUT_MS 120000U
 
 typedef void (*BambuBridgeLineHandler)(BambuTransport* transport, const char* line);
 
@@ -17,6 +18,8 @@ static void bambu_bridge_append_encoded_field(
     size_t buffer_size,
     size_t* offset,
     const char* value);
+static void bambu_bridge_reset_progress(BambuTransport* transport);
+static void bambu_bridge_handle_progress_line(BambuTransport* transport, const char* line);
 
 static uint32_t bambu_bridge_ms_to_ticks(uint32_t ms) {
     uint32_t tick_hz = furi_kernel_get_tick_frequency();
@@ -43,6 +46,17 @@ static void bambu_bridge_set_response(BambuTransport* transport, const char* mes
         sizeof(transport->last_response),
         "%s",
         message ? message : "");
+}
+
+static void bambu_bridge_reset_progress(BambuTransport* transport) {
+    if(!transport) {
+        return;
+    }
+
+    transport->busy_has_progress = false;
+    transport->busy_current = 0;
+    transport->busy_total = 0;
+    transport->busy_label[0] = '\0';
 }
 
 static void bambu_bridge_append_encoded_field(
@@ -322,6 +336,29 @@ static void bambu_bridge_handle_printer_line(BambuTransport* transport, const ch
     bambu_bridge_set_response(transport, printer->name);
 }
 
+static void bambu_bridge_handle_progress_line(BambuTransport* transport, const char* line) {
+    unsigned int current = 0;
+    unsigned int total = 0;
+    char label[BAMBU_MONITOR_STATUS_TEXT_SIZE];
+
+    if(!transport || !line || strncmp(line, "PROGRESS|", 9) != 0) {
+        return;
+    }
+
+    memset(label, 0, sizeof(label));
+    if(sscanf(line, "PROGRESS|%u|%u|%63[^\n]", &current, &total, label) < 2) {
+        return;
+    }
+
+    transport->busy_has_progress = total > 0;
+    transport->busy_current = (uint16_t)current;
+    transport->busy_total = (uint16_t)total;
+    snprintf(transport->busy_label, sizeof(transport->busy_label), "%s", label);
+    if(transport->progress_callback) {
+        transport->progress_callback(transport->progress_context);
+    }
+}
+
 static void bambu_bridge_handle_status_line(BambuTransport* transport, const char* line) {
     char line_copy[BAMBU_BRIDGE_LINE_SIZE];
     char* fields[14];
@@ -419,6 +456,11 @@ static bool bambu_bridge_wait_for_result(
     char line[BAMBU_BRIDGE_LINE_SIZE];
 
     while(bambu_bridge_read_line(transport, line, sizeof(line), timeout_ms)) {
+        if(strncmp(line, "STATUS|", 7) == 0) {
+            bambu_bridge_handle_status_line(transport, line);
+            continue;
+        }
+
         if(strncmp(line, "OK|", 3) == 0) {
             if(strcmp(line, "OK|PONG") == 0) {
                 bambu_bridge_set_response(transport, "Bridge online");
@@ -444,6 +486,11 @@ static bool bambu_bridge_wait_for_result(
             bambu_bridge_set_response(transport, line + 4);
             bambu_bridge_activity(transport, false);
             return false;
+        }
+
+        if(strncmp(line, "PROGRESS|", 9) == 0) {
+            bambu_bridge_handle_progress_line(transport, line);
+            continue;
         }
 
         if(line_handler) {
@@ -554,6 +601,7 @@ static bool bambu_transport_live_scan_wifi(BambuTransport* transport) {
     }
 
     transport->wifi_network_count = 0;
+    bambu_bridge_reset_progress(transport);
     bambu_bridge_set_response(transport, "");
     bambu_bridge_flush_rx(transport);
     bambu_bridge_activity(transport, true);
@@ -591,6 +639,7 @@ static bool bambu_transport_live_wifi_connect(
             transport->tx_line_buffer, sizeof(transport->tx_line_buffer), &offset, password);
     }
 
+    bambu_bridge_reset_progress(transport);
     bambu_bridge_set_response(transport, "");
     bambu_bridge_flush_rx(transport);
     bambu_bridge_activity(transport, true);
@@ -606,6 +655,7 @@ static bool bambu_transport_live_wifi_reconnect(BambuTransport* transport) {
         return false;
     }
 
+    bambu_bridge_reset_progress(transport);
     bambu_bridge_set_response(transport, "");
     bambu_bridge_flush_rx(transport);
     bambu_bridge_activity(transport, true);
@@ -621,6 +671,7 @@ static bool bambu_transport_live_wifi_status(BambuTransport* transport) {
         return false;
     }
 
+    bambu_bridge_reset_progress(transport);
     bambu_bridge_set_response(transport, "");
     bambu_bridge_flush_rx(transport);
     bambu_bridge_activity(transport, true);
@@ -643,6 +694,7 @@ static bool bambu_transport_live_set_token(BambuTransport* transport, const char
         sizeof(transport->tx_line_buffer),
         "BAMBU_SET_TOKEN|%s",
         token);
+    bambu_bridge_reset_progress(transport);
     bambu_bridge_set_response(transport, "");
     bambu_bridge_flush_rx(transport);
     bambu_bridge_activity(transport, true);
@@ -675,13 +727,14 @@ static bool bambu_transport_live_discover_printers(BambuTransport* transport) {
 
     transport->printer_count = 0;
     memset(transport->printers, 0, sizeof(transport->printers));
+    bambu_bridge_reset_progress(transport);
     bambu_bridge_set_response(transport, "");
     bambu_bridge_flush_rx(transport);
     bambu_bridge_activity(transport, true);
     bambu_bridge_send_command(transport, "BAMBU_DISCOVER");
     return bambu_bridge_wait_for_result(
         transport,
-        BAMBU_BRIDGE_DEFAULT_TIMEOUT_MS,
+        BAMBU_BRIDGE_DISCOVER_TIMEOUT_MS,
         bambu_bridge_handle_printer_line);
 }
 
@@ -706,6 +759,7 @@ static bool bambu_transport_live_refresh_status(BambuTransport* transport, const
         return false;
     }
 
+    bambu_bridge_reset_progress(transport);
     bambu_bridge_set_response(transport, "");
     bambu_bridge_flush_rx(transport);
     bambu_bridge_activity(transport, true);

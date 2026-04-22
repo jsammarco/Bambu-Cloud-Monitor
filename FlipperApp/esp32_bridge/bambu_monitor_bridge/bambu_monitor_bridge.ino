@@ -13,12 +13,18 @@ constexpr const char* kPrefsNamespace = "bambu-bridge";
 constexpr const char* kApiBase = "https://api.bambulab.com";
 constexpr const char* kPythonUserAgent = "python-requests/2.31.0";
 constexpr uint16_t kMqttPort = 8883;
-constexpr uint32_t kMqttTimeoutMs = 2500;
+constexpr uint32_t kProbeConnectTimeoutMs = 250;
+constexpr uint32_t kMqttTimeoutMs = 8000;
 constexpr uint32_t kMqttPushallIntervalMs = 250;
-constexpr uint32_t kMqttCollectWindowMs = 700;
-constexpr uint32_t kMqttQuietWindowMs = 150;
+constexpr uint32_t kMqttCollectWindowMs = 1800;
+constexpr uint32_t kMqttQuietWindowMs = 500;
 constexpr uint32_t kCacheRefreshIntervalMs = 4000;
 constexpr size_t kMaxCachedPrinters = 8;
+constexpr uint8_t kResolveAuthAttempts = 2;
+constexpr uint8_t kStatusAttempts = 2;
+constexpr size_t kMqttBufferSize = 16384;
+constexpr size_t kPacketJsonCapacity = 16384;
+constexpr size_t kMergedJsonCapacity = 24576;
 
 struct CachedPrinterState {
   bool used = false;
@@ -69,6 +75,18 @@ size_t nextRefreshIndex = 0;
 
 void bridgeReply(const String& line);
 bool ensureWifiConnected();
+void clearCachedPrinters();
+bool probeMqttPort(const IPAddress& ip);
+bool mqttAuthSucceeds(const String& serial, const IPAddress& ip, const String& accessCode);
+String resolvePrinterIp(const String& serial, const String& accessCode);
+void emitProgress(size_t current, size_t total, const String& label);
+bool warmPrinterStatus(CachedPrinterState* entry, String* errorOut);
+bool collectPrinterStatusWithRetry(
+    const String& serial,
+    const String& ip,
+    const String& accessCode,
+    CachedPrinterState* cacheEntry,
+    String* errorOut);
 
 String getSavedToken() {
   return prefs.getString("token", "");
@@ -130,7 +148,7 @@ void publishPushAll(const String& requestTopic) {
 }
 
 bool mergePrintPayload(DynamicJsonDocument& mergedDoc, const String& payload) {
-  DynamicJsonDocument packetDoc(8192);
+  DynamicJsonDocument packetDoc(kPacketJsonCapacity);
   JsonObject mergedPrint;
   JsonObject packetPrint;
   DeserializationError jsonError = deserializeJson(packetDoc, payload);
@@ -268,6 +286,23 @@ void updateCachedPrinterFromPrint(CachedPrinterState& entry, const JsonObjectCon
   entry.lastRefreshMs = millis();
 }
 
+void clearCachedPrinters() {
+  for (size_t i = 0; i < kMaxCachedPrinters; ++i) {
+    cachedPrinters[i] = CachedPrinterState();
+  }
+  nextRefreshIndex = 0;
+}
+
+void emitProgress(size_t current, size_t total, const String& label) {
+  String line = "PROGRESS|";
+  line += String(current);
+  line += "|";
+  line += String(total);
+  line += "|";
+  line += sanitizeForBridge(label, 63);
+  bridgeReply(line);
+}
+
 void emitCachedStatus(const CachedPrinterState& entry) {
   String line = "STATUS|";
   line += entry.serial;
@@ -306,13 +341,14 @@ bool collectPrinterStatus(
     const String& accessCode,
     CachedPrinterState* cacheEntry,
     String* errorOut) {
-  DynamicJsonDocument mergedDoc(12288);
+  DynamicJsonDocument mergedDoc(kMergedJsonCapacity);
   String requestTopic;
   uint32_t start = 0;
   uint32_t lastPushAll = 0;
   uint32_t firstMessageAt = 0;
   uint32_t lastMessageAt = 0;
   bool receivedAnyPrint = false;
+  bool sawPayloadButParseFailed = false;
 
   if (serial.isEmpty() || ip.isEmpty() || accessCode.isEmpty()) {
     if (errorOut) {
@@ -332,7 +368,7 @@ bool collectPrinterStatus(
   mqttNetClient.setInsecure();
   mqttClient.setServer(ip.c_str(), kMqttPort);
   mqttClient.setCallback(onMqttMessage);
-  mqttClient.setBufferSize(8192);
+  mqttClient.setBufferSize(kMqttBufferSize);
   mqttClient.setKeepAlive(15);
   mqttClient.setSocketTimeout(4);
 
@@ -382,6 +418,8 @@ bool collectPrinterStatus(
         }
         receivedAnyPrint = true;
         lastMessageAt = now;
+      } else if (mqttLastPayload.length() > 0) {
+        sawPayloadButParseFailed = true;
       }
     }
 
@@ -398,7 +436,7 @@ bool collectPrinterStatus(
 
   if (!receivedAnyPrint || !mergedDoc.is<JsonObject>()) {
     if (errorOut) {
-      *errorOut = "MQTT timeout";
+      *errorOut = sawPayloadButParseFailed ? "MQTT JSON parse failed" : "MQTT timeout";
     }
     return false;
   }
@@ -416,6 +454,117 @@ bool collectPrinterStatus(
   }
 
   return true;
+}
+
+bool probeMqttPort(const IPAddress& ip) {
+  WiFiClientSecure probeClient;
+
+  probeClient.setInsecure();
+  probeClient.setTimeout((kProbeConnectTimeoutMs + 999U) / 1000U);
+  if (!probeClient.connect(ip, kMqttPort, static_cast<int>(kProbeConnectTimeoutMs))) {
+    return false;
+  }
+
+  probeClient.stop();
+  return true;
+}
+
+bool mqttAuthSucceeds(const String& serial, const IPAddress& ip, const String& accessCode) {
+  WiFiClientSecure authNetClient;
+  PubSubClient authClient(authNetClient);
+
+  if (serial.isEmpty() || accessCode.isEmpty()) {
+    return false;
+  }
+
+  authNetClient.setInsecure();
+  authClient.setServer(ip, kMqttPort);
+  authClient.setSocketTimeout(2);
+  authClient.setKeepAlive(10);
+
+  if (!authClient.connect(serial.c_str(), "bblp", accessCode.c_str())) {
+    authClient.disconnect();
+    return false;
+  }
+
+  authClient.disconnect();
+  return true;
+}
+
+String resolvePrinterIp(const String& serial, const String& accessCode) {
+  IPAddress localIp = WiFi.localIP();
+  IPAddress candidate(localIp[0], localIp[1], localIp[2], 0);
+
+  if ((localIp[0] == 0 && localIp[1] == 0 && localIp[2] == 0 && localIp[3] == 0) ||
+      accessCode.isEmpty() || serial.isEmpty()) {
+    return "";
+  }
+
+  for (uint16_t host = 1; host < 255; ++host) {
+    bool matched = false;
+
+    if (host == localIp[3]) {
+      continue;
+    }
+
+    candidate[3] = static_cast<uint8_t>(host);
+    if (!probeMqttPort(candidate)) {
+      continue;
+    }
+
+    for (uint8_t attempt = 0; attempt < kResolveAuthAttempts; ++attempt) {
+      if (mqttAuthSucceeds(serial, candidate, accessCode)) {
+        matched = true;
+        break;
+      }
+      delay(20);
+    }
+
+    if (matched) {
+      return candidate.toString();
+    }
+
+    delay(1);
+  }
+
+  return "";
+}
+
+bool warmPrinterStatus(CachedPrinterState* entry, String* errorOut) {
+  if (!entry || entry->serial.isEmpty() || entry->ip.isEmpty() || entry->accessCode.isEmpty()) {
+    if (errorOut) {
+      *errorOut = "Missing serial, ip, or access code";
+    }
+    return false;
+  }
+
+  entry->lastAttemptMs = millis();
+  return collectPrinterStatusWithRetry(entry->serial, entry->ip, entry->accessCode, entry, errorOut);
+}
+
+bool collectPrinterStatusWithRetry(
+    const String& serial,
+    const String& ip,
+    const String& accessCode,
+    CachedPrinterState* cacheEntry,
+    String* errorOut) {
+  String lastError;
+
+  for (uint8_t attempt = 0; attempt < kStatusAttempts; ++attempt) {
+    if (collectPrinterStatus(serial, ip, accessCode, cacheEntry, &lastError)) {
+      if (errorOut) {
+        *errorOut = "";
+      }
+      return true;
+    }
+
+    delay(100);
+  }
+
+  if (errorOut) {
+    *errorOut = lastError;
+  }
+  return false;
 }
 
 void serviceCachedPrinterRefresh() {
@@ -675,21 +824,44 @@ void runBambuDiscover() {
     return;
   }
 
+  clearCachedPrinters();
+
   JsonArray devices = doc["devices"].as<JsonArray>();
+  size_t total = devices.size();
   size_t count = 0;
+  emitProgress(0, total > 0 ? total : 1, total > 0 ? "Fetching printers" : "No printers found");
   for (JsonObject device : devices) {
-    String serial = device["dev_id"] | "";
-    String name = device["name"] | "";
-    String model = device["dev_product_name"] | "";
-    String accessCode = device["dev_access_code"] | "";
+    String serial = sanitizeForBridge(String(device["dev_id"] | ""), 31);
+    String name = sanitizeForBridge(String(device["name"] | ""), 47);
+    String model = sanitizeForBridge(String(device["dev_product_name"] | ""), 23);
+    String accessCode = sanitizeForBridge(String(device["dev_access_code"] | ""), 31);
     bool online = device["online"] | false;
-    String cloudStatus = device["print_status"] | "";
-    CachedPrinterState* entry = ensureCachedPrinter(serial, "", accessCode);
+    String cloudStatus = sanitizeForBridge(String(device["print_status"] | ""), 63);
+    String resolvedIp;
+    CachedPrinterState* entry = nullptr;
+
+    if (serial.isEmpty()) {
+      continue;
+    }
+
+    emitProgress(count, total, name.length() > 0 ? name : serial);
+
+    if (!accessCode.isEmpty()) {
+      resolvedIp = resolvePrinterIp(serial, accessCode);
+    }
+
+    entry = ensureCachedPrinter(serial, resolvedIp, accessCode);
     if (entry) {
       entry->name = name;
       entry->model = model;
       entry->cloudStatus = cloudStatus;
       entry->online = online;
+      if (!resolvedIp.isEmpty()) {
+        String statusError;
+        if (warmPrinterStatus(entry, &statusError) && entry->hasStatus) {
+          emitCachedStatus(*entry);
+        }
+      }
     }
     String line = "PRINTER|";
     line += serial;
@@ -698,7 +870,7 @@ void runBambuDiscover() {
     line += "|";
     line += model;
     line += "|";
-    line += "";  // local IP placeholder until local MQTT/IP matching is added
+    line += resolvedIp;
     line += "|";
     line += accessCode;
     line += "|";
@@ -707,6 +879,7 @@ void runBambuDiscover() {
     line += cloudStatus;
     bridgeReply(line);
     count++;
+    emitProgress(count, total, name.length() > 0 ? name : serial);
   }
 
   bridgeReply("OK|BAMBU_DISCOVER|" + String(count));
@@ -770,7 +943,7 @@ void runBambuStatusLocal(const String& serial, const String& ip, const String& a
   }
 
   entry->lastAttemptMs = millis();
-  success = collectPrinterStatus(serial, ip, accessCode, entry, &error);
+  success = collectPrinterStatusWithRetry(serial, ip, accessCode, entry, &error);
 
   if (entry->hasStatus) {
       emitCachedStatus(*entry);

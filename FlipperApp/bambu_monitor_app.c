@@ -53,6 +53,7 @@ static void bambu_monitor_app_load_path_settings(BambuMonitorApp* app);
 static void bambu_monitor_app_save_path_settings(BambuMonitorApp* app);
 static bool bambu_monitor_app_refresh_selected_in_place(BambuMonitorApp* app, bool update_status_line);
 static void bambu_monitor_app_tick_event_callback(void* context);
+static void bambu_monitor_app_transport_progress(void* context);
 
 static void bambu_monitor_app_main_view_draw(Canvas* canvas, void* model) {
     BambuMonitorMainViewModel* view_model = model;
@@ -543,6 +544,16 @@ static void bambu_monitor_app_tick_event_callback(void* context) {
     }
 }
 
+static void bambu_monitor_app_transport_progress(void* context) {
+    BambuMonitorApp* app = context;
+
+    if(!app) {
+        return;
+    }
+
+    bambu_monitor_app_request_redraw(app);
+}
+
 static bool bambu_monitor_app_load_token_from_path(BambuMonitorApp* app, const char* path) {
     char* content = NULL;
     char* cursor = NULL;
@@ -554,6 +565,15 @@ static bool bambu_monitor_app_load_token_from_path(BambuMonitorApp* app, const c
     }
 
     cursor = content;
+    while(*cursor == ' ' || *cursor == '\r' || *cursor == '\n' || *cursor == '\t') {
+        cursor++;
+    }
+
+    if((unsigned char)cursor[0] == 0xEF && (unsigned char)cursor[1] == 0xBB &&
+       (unsigned char)cursor[2] == 0xBF) {
+        cursor += 3;
+    }
+
     while(*cursor == ' ' || *cursor == '\r' || *cursor == '\n' || *cursor == '\t') {
         cursor++;
     }
@@ -706,6 +726,10 @@ static void bambu_monitor_app_queue_busy_action(
     }
 
     bambu_monitor_app_set_status(app, status, detail);
+    app->transport.busy_has_progress = false;
+    app->transport.busy_current = 0;
+    app->transport.busy_total = 0;
+    app->transport.busy_label[0] = '\0';
     app->screen = BambuMonitorScreenBusy;
     view_dispatcher_switch_to_view(app->view_dispatcher, BambuMonitorViewMain);
     view_dispatcher_send_custom_event(app->view_dispatcher, event);
@@ -804,22 +828,15 @@ static bool bambu_monitor_app_try_discover_with_token(BambuMonitorApp* app) {
         return false;
     }
 
-    if(app->printer_cache_path && furi_string_size(app->printer_cache_path) > 0) {
-        success = bambu_monitor_app_load_printer_cache_from_path(
-            app,
-            furi_string_get_cstr(app->printer_cache_path));
-    } else {
-        success = bambu_monitor_app_load_printer_cache(app);
-    }
-
+    success = bambu_transport_discover_printers(&app->transport);
     if(!success) {
-        bambu_monitor_app_log(app, "discover cache_missing");
+        bambu_monitor_app_log(app, "discover bridge_failed response=%s", app->transport.last_response);
         return false;
     }
 
     bambu_monitor_app_log(
         app,
-        "discover begin local_mqtt printers=%u",
+        "discover begin fresh_scan printers=%u",
         (unsigned)app->transport.printer_count);
     bambu_monitor_app_refresh_all_printers(app);
     return true;
@@ -938,7 +955,8 @@ static bool bambu_monitor_app_handle_custom_event(void* context, uint32_t event)
             bambu_monitor_app_set_status(
                 app,
                 "Discover Failed",
-                "Load or select found_printers.json");
+                app->transport.last_response[0] ? app->transport.last_response :
+                                                  "Check WiFi and token");
         } else {
             bambu_monitor_app_log(
                 app,
@@ -947,8 +965,8 @@ static bool bambu_monitor_app_handle_custom_event(void* context, uint32_t event)
                 app->transport.last_response);
             bambu_monitor_app_set_status(
                 app,
-                "Printers Refreshed",
-                "Loaded cache and updated via local MQTT");
+                "Printers Discovered",
+                "Fresh cloud + local network scan");
         }
         app->screen = success ? BambuMonitorScreenPrinterList : BambuMonitorScreenMainMenu;
         if(app->printer_index >= app->transport.printer_count) {
@@ -1047,6 +1065,10 @@ int32_t bambu_monitor_app(void* p) {
         bambu_transport_set_activity_callback(
             &app->transport,
             bambu_monitor_app_bridge_activity,
+            app);
+        bambu_transport_set_progress_callback(
+            &app->transport,
+            bambu_monitor_app_transport_progress,
             app);
         bambu_transport_wifi_status(&app->transport);
         bambu_monitor_app_log(

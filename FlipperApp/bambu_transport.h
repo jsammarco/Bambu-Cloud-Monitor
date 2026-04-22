@@ -69,6 +69,7 @@ typedef struct {
 } BambuTransportOps;
 
 typedef void (*BambuTransportActivityCallback)(void* context, bool active);
+typedef void (*BambuTransportProgressCallback)(void* context);
 
 struct BambuTransport {
     const BambuTransportOps* ops;
@@ -85,8 +86,14 @@ struct BambuTransport {
     FuriHalSerialHandle* serial_handle;
     FuriStreamBuffer* rx_stream;
     char tx_line_buffer[512];
+    bool busy_has_progress;
+    uint16_t busy_current;
+    uint16_t busy_total;
+    char busy_label[BAMBU_MONITOR_STATUS_TEXT_SIZE];
     BambuTransportActivityCallback activity_callback;
     void* activity_context;
+    BambuTransportProgressCallback progress_callback;
+    void* progress_context;
 };
 
 const BambuTransportOps* bambu_transport_live_ops(void);
@@ -171,4 +178,16 @@ static inline void bambu_transport_set_activity_callback(
 
     transport->activity_callback = callback;
     transport->activity_context = context;
+}
+
+static inline void bambu_transport_set_progress_callback(
+    BambuTransport* transport,
+    BambuTransportProgressCallback callback,
+    void* context) {
+    if(!transport) {
+        return;
+    }
+
+    transport->progress_callback = callback;
+    transport->progress_context = context;
 }

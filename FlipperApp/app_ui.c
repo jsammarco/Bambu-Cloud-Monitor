@@ -89,11 +89,35 @@ static void bambu_ui_draw_main_menu(Canvas* canvas, BambuMonitorApp* app) {
 }
 
 static void bambu_ui_draw_busy(Canvas* canvas, BambuMonitorApp* app) {
+    uint16_t current = 0;
+    uint16_t total = 0;
+    uint8_t filled = 0;
+    char progress_text[24];
+
     canvas_clear(canvas);
     canvas_set_font(canvas, FontPrimary);
     bambu_ui_draw_line(canvas, 14, app->status_line);
     canvas_set_font(canvas, FontSecondary);
     bambu_ui_draw_line(canvas, 26, app->detail_line);
+
+    if(app->transport.busy_has_progress && app->transport.busy_total > 0) {
+        current = app->transport.busy_current;
+        total = app->transport.busy_total;
+        if(current > total) {
+            current = total;
+        }
+
+        filled = (uint8_t)((current * 96U) / total);
+        canvas_draw_frame(canvas, 12, 28, 100, 10);
+        if(filled > 0) {
+            canvas_draw_box(canvas, 14, 30, filled, 6);
+        }
+        snprintf(progress_text, sizeof(progress_text), "%u/%u", current, total);
+        bambu_ui_draw_line(canvas, 46, progress_text);
+        bambu_ui_draw_line(canvas, 58, app->transport.busy_label[0] ? app->transport.busy_label : "Scanning");
+        return;
+    }
+
     bambu_ui_draw_line(canvas, 42, "Bridge action in progress");
     bambu_ui_draw_line(canvas, 52, "Please wait...");
 }
@@ -178,7 +202,7 @@ static void bambu_ui_draw_printer_list(Canvas* canvas, BambuMonitorApp* app) {
 static void bambu_ui_draw_printer_detail(Canvas* canvas, BambuMonitorApp* app) {
     const BambuPrinterInfo* printer = bambu_monitor_app_selected_printer(app);
     const char* lines[BAMBU_PRINTER_DETAIL_LINE_COUNT];
-    char line_buf[BAMBU_PRINTER_DETAIL_LINE_COUNT][BAMBU_MONITOR_DETAIL_TEXT_SIZE];
+    char line_buf[BAMBU_PRINTER_DETAIL_LINE_COUNT][BAMBU_MONITOR_STATUS_TEXT_SIZE];
     size_t line_count = 0;
     size_t first_visible = 0;
     char value_a[16];
@@ -450,8 +474,10 @@ static void bambu_ui_handle_printer_list(BambuMonitorApp* app, const InputEvent*
         }
         break;
     case InputKeyOk:
-        app->screen = BambuMonitorScreenPrinterDetail;
-        app->detail_scroll = 0;
+        if(app->transport.printer_count > 0 && app->printer_index < app->transport.printer_count) {
+            app->screen = BambuMonitorScreenPrinterDetail;
+            app->detail_scroll = 0;
+        }
         break;
     case InputKeyBack:
         app->screen = BambuMonitorScreenMainMenu;
