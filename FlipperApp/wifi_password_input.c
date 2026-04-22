@@ -34,6 +34,8 @@ typedef struct {
     uint8_t selected_row;
     uint8_t selected_column;
     uint8_t selected_keyboard;
+    bool cursor_select;
+    size_t cursor_pos;
 
     WifiPasswordInputValidatorCallback validator_callback;
     void* validator_callback_context;
@@ -214,20 +216,20 @@ static char char_to_uppercase(char letter) {
 }
 
 static void wifi_password_input_backspace_cb(WifiPasswordInputModel* model) {
-    size_t text_length = 0;
-
     if(!model->text_buffer || model->text_buffer_size == 0) {
         return;
     }
 
     if(model->clear_default_text) {
         model->text_buffer[0] = '\0';
+        model->cursor_pos = 0;
         return;
     }
 
-    text_length = strlen(model->text_buffer);
-    if(text_length > 0) {
-        model->text_buffer[text_length - 1] = '\0';
+    if(model->cursor_pos > 0) {
+        char* move = model->text_buffer + model->cursor_pos;
+        memmove(move - 1, move, strlen(move) + 1);
+        model->cursor_pos--;
     }
 }
 
@@ -238,7 +240,8 @@ static void wifi_password_input_draw_key(
     uint8_t row,
     uint8_t column,
     bool uppercase) {
-    const bool selected = model->selected_row == row && model->selected_column == column;
+    const bool selected =
+        !model->cursor_select && model->selected_row == row && model->selected_column == column;
     const Icon* icon = NULL;
     char glyph = key->text;
 
@@ -276,13 +279,23 @@ static void wifi_password_input_draw_key(
 static void wifi_password_input_view_draw_callback(Canvas* canvas, void* _model) {
     WifiPasswordInputModel* model = _model;
     const WifiPasswordKeyboard* keyboard = wifi_password_input_current_keyboard(model);
-    const char* text = model->text_buffer ? model->text_buffer : "";
-    const bool uppercase = model->clear_default_text || text[0] == '\0';
+    uint8_t text_length = model->text_buffer ? strlen(model->text_buffer) : 0;
+    const bool uppercase = model->clear_default_text || text_length == 0;
     char page_label[8];
     uint8_t needed_string_width = canvas_width(canvas) - 8;
     uint8_t start_pos = 4;
+    size_t cursor_pos = 0;
+    char buf[text_length + 2];
+    char* text = buf;
 
     snprintf(page_label, sizeof(page_label), "%u/%u", (unsigned)(model->selected_keyboard + 1U), (unsigned)keyboard_count);
+
+    model->cursor_pos = model->cursor_pos > text_length ? text_length : model->cursor_pos;
+    cursor_pos = model->cursor_pos;
+    buf[0] = '\0';
+    if(model->text_buffer) {
+        strlcpy(buf, model->text_buffer, sizeof(buf));
+    }
 
     canvas_clear(canvas);
     canvas_set_color(canvas, ColorBlack);
@@ -290,23 +303,35 @@ static void wifi_password_input_view_draw_callback(Canvas* canvas, void* _model)
     canvas_draw_str(canvas, 108, 8, page_label);
     elements_slightly_rounded_frame(canvas, 1, 12, 126, 15);
 
-    if(canvas_string_width(canvas, text) > needed_string_width) {
-        canvas_draw_str(canvas, start_pos, 22, "...");
-        start_pos += 6;
-        needed_string_width -= 8;
-    }
-
-    while(*text && canvas_string_width(canvas, text) > needed_string_width) {
-        text++;
-    }
-
     if(model->clear_default_text) {
         elements_slightly_rounded_box(
             canvas, start_pos - 1, 14, canvas_string_width(canvas, text) + 2, 10);
         canvas_set_color(canvas, ColorWhite);
     } else {
-        canvas_draw_str(canvas, start_pos + canvas_string_width(canvas, text) + 1, 22, "|");
-        canvas_draw_str(canvas, start_pos + canvas_string_width(canvas, text) + 2, 22, "|");
+        char* move = text + cursor_pos;
+        memmove(move + 1, move, strlen(move) + 1);
+        text[cursor_pos] = '|';
+    }
+
+    if(cursor_pos > 0 && canvas_string_width(canvas, text) > needed_string_width) {
+        canvas_draw_str(canvas, start_pos, 22, "...");
+        start_pos += 6;
+        needed_string_width -= 8;
+        for(uint32_t off = 0;
+            strlen(text) && canvas_string_width(canvas, text) > needed_string_width &&
+            off < cursor_pos;
+            off++) {
+            text++;
+        }
+    }
+
+    if(canvas_string_width(canvas, text) > needed_string_width) {
+        needed_string_width -= 4;
+        size_t len = strlen(text);
+        while(len && canvas_string_width(canvas, text) > needed_string_width) {
+            text[len--] = '\0';
+        }
+        strlcat(text, "...", sizeof(buf) - (text - buf));
     }
     canvas_draw_str(canvas, start_pos, 22, text);
 
@@ -340,13 +365,18 @@ static void wifi_password_input_handle_up(WifiPasswordInputModel* model) {
         if(model->selected_column >= get_row_size(keyboard, model->selected_row)) {
             model->selected_column = get_row_size(keyboard, model->selected_row) - 1;
         }
+    } else {
+        model->cursor_select = true;
+        model->clear_default_text = false;
     }
 }
 
 static void wifi_password_input_handle_down(WifiPasswordInputModel* model) {
     const WifiPasswordKeyboard* keyboard = wifi_password_input_current_keyboard(model);
 
-    if(model->selected_row + 1 < keyboard_row_count) {
+    if(model->cursor_select) {
+        model->cursor_select = false;
+    } else if(model->selected_row + 1 < keyboard_row_count) {
         model->selected_row++;
         if(model->selected_column >= get_row_size(keyboard, model->selected_row)) {
             model->selected_column = get_row_size(keyboard, model->selected_row) - 1;
@@ -357,7 +387,12 @@ static void wifi_password_input_handle_down(WifiPasswordInputModel* model) {
 static void wifi_password_input_handle_left(WifiPasswordInputModel* model) {
     const WifiPasswordKeyboard* keyboard = wifi_password_input_current_keyboard(model);
 
-    if(model->selected_column > 0) {
+    if(model->cursor_select) {
+        model->clear_default_text = false;
+        if(model->cursor_pos > 0) {
+            model->cursor_pos = CLAMP(model->cursor_pos - 1, strlen(model->text_buffer), 0u);
+        }
+    } else if(model->selected_column > 0) {
         model->selected_column--;
     } else {
         model->selected_column = get_row_size(keyboard, model->selected_row) - 1;
@@ -367,7 +402,10 @@ static void wifi_password_input_handle_left(WifiPasswordInputModel* model) {
 static void wifi_password_input_handle_right(WifiPasswordInputModel* model) {
     const WifiPasswordKeyboard* keyboard = wifi_password_input_current_keyboard(model);
 
-    if(model->selected_column + 1 < get_row_size(keyboard, model->selected_row)) {
+    if(model->cursor_select) {
+        model->clear_default_text = false;
+        model->cursor_pos = CLAMP(model->cursor_pos + 1, strlen(model->text_buffer), 0u);
+    } else if(model->selected_column + 1 < get_row_size(keyboard, model->selected_row)) {
         model->selected_column++;
     } else {
         model->selected_column = 0;
@@ -382,6 +420,11 @@ static void wifi_password_input_handle_ok(
     size_t text_length = 0;
 
     if(!model->text_buffer || model->text_buffer_size == 0) {
+        return;
+    }
+
+    if(model->cursor_select) {
+        model->clear_default_text = !model->clear_default_text;
         return;
     }
 
@@ -411,16 +454,20 @@ static void wifi_password_input_handle_ok(
         }
 
         if(text_length < model->text_buffer_size - 1U) {
-            if(type == InputTypeLong && model->selected_keyboard == keyboard_alpha.keyboard_index) {
+            if((type == InputTypeLong) != (text_length == 0) &&
+               model->selected_keyboard == keyboard_alpha.keyboard_index) {
                 selected = char_to_uppercase(selected);
             }
 
             if(model->clear_default_text) {
                 model->text_buffer[0] = selected;
                 model->text_buffer[1] = '\0';
+                model->cursor_pos = 1;
             } else {
-                model->text_buffer[text_length] = selected;
-                model->text_buffer[text_length + 1] = '\0';
+                char* move = model->text_buffer + model->cursor_pos;
+                memmove(move + 1, move, strlen(move) + 1);
+                model->text_buffer[model->cursor_pos] = selected;
+                model->cursor_pos++;
             }
         }
     }
@@ -572,6 +619,8 @@ void wifi_password_input_reset(WifiPasswordInput* input) {
             model->selected_row = 0;
             model->selected_column = 0;
             model->selected_keyboard = 0;
+            model->cursor_select = false;
+            model->cursor_pos = 0;
             model->minimum_length = 1;
             model->clear_default_text = false;
             model->text_buffer = NULL;
@@ -612,6 +661,8 @@ void wifi_password_input_set_result_callback(
             model->selected_keyboard = 0;
             model->selected_row = 0;
             model->selected_column = 0;
+            model->cursor_select = false;
+            model->cursor_pos = text_buffer ? strlen(text_buffer) : 0;
             if(text_buffer && text_buffer[0] != '\0') {
                 model->selected_row = 2;
                 model->selected_column = 9;
