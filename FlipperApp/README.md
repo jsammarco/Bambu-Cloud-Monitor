@@ -97,7 +97,7 @@ Typical flow on-device:
 6. open a printer detail page
 7. use `OK` to refresh, `Up/Down` to scroll, `Left/Right` to move between printers
 
-On the WiFi password screen, the custom keyboard includes direct symbol keys such as `*`, `_`, `-`, `.`, `@`, `!`, and `?`. Long-press `OK` on a key to enter its shifted variant, such as uppercase letters, space from `_`, or extra symbols like `+`, `:`, and `\`.
+On the WiFi password screen, the custom keyboard now uses three pages. Use the keyboard-switch key in the lower-left corner to cycle pages. The pages split letters, common symbols, and extra punctuation so the layout stays readable while still exposing direct entries like `*`, `?`, `"`, `:`, `/`, `\`, `|`, `<`, and `>`. Long-press `OK` on the letter page to enter uppercase letters, or a space from `_`.
 
 ## UART Protocol
 
