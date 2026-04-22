@@ -2,13 +2,13 @@
 
 #include "bambu_monitor_config.h"
 #include "bambu_transport.h"
+#include "wifi_password_input.h"
 
 #include <furi.h>
 #include <dialogs/dialogs.h>
 #include <gui/gui.h>
 #include <gui/view.h>
 #include <gui/view_dispatcher.h>
-#include <gui/modules/text_input.h>
 #include <input/input.h>
 #include <notification/notification.h>
 #include <storage/storage.h>
@@ -29,7 +29,7 @@ typedef struct {
     Storage* storage;
     ViewDispatcher* view_dispatcher;
     View* main_view;
-    TextInput* text_input;
+    WifiPasswordInput* text_input;
     FuriString* token_file_path;
     FuriString* printer_cache_path;
     BambuTransport transport;

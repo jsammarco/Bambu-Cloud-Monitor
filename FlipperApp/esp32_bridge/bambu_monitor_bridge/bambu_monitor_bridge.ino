@@ -494,6 +494,34 @@ String splitField(String& input, char delimiter) {
   return value;
 }
 
+int hexValue(char c) {
+  if (c >= '0' && c <= '9') return c - '0';
+  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+  return -1;
+}
+
+String decodeBridgeField(const String& input) {
+  String decoded;
+  decoded.reserve(input.length());
+
+  for (size_t i = 0; i < input.length(); ++i) {
+    char c = input[i];
+    if (c == '%' && (i + 2) < input.length()) {
+      int hi = hexValue(input[i + 1]);
+      int lo = hexValue(input[i + 2]);
+      if (hi >= 0 && lo >= 0) {
+        decoded += static_cast<char>((hi << 4) | lo);
+        i += 2;
+        continue;
+      }
+    }
+    decoded += c;
+  }
+
+  return decoded;
+}
+
 bool ensureWifiConnected() {
   if (WiFi.status() == WL_CONNECTED) {
     return true;
@@ -794,8 +822,8 @@ void handleCommand(String line) {
   String command = splitField(remainder, '|');
 
   if (command == "WIFI_CONNECT") {
-    String ssid = splitField(remainder, '|');
-    String password = remainder;
+    String ssid = decodeBridgeField(splitField(remainder, '|'));
+    String password = decodeBridgeField(remainder);
     runWiFiConnect(ssid, password);
     return;
   }

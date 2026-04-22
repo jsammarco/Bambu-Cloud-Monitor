@@ -12,6 +12,7 @@ App(
         "app_ui.c",
         "bambu_monitor_app.c",
         "bambu_transport_live.c",
+        "wifi_password_input.c",
     ],
     requires=[
         "gui",

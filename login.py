@@ -140,6 +140,7 @@ Examples:
             try:
                 profile = client.get_user_profile()
                 print("Token verified!")
+                print(profile)
                 print(f"User: {profile.get('name', 'N/A')}")
                 print(f"Email: {profile.get('email', 'N/A')}")
                 

@@ -653,10 +653,10 @@ static void bambu_monitor_app_show_keyboard_internal(BambuMonitorApp* app, const
         return;
     }
 
-    text_input_reset(app->text_input);
-    text_input_set_header_text(app->text_input, header);
-    text_input_set_minimum_length(app->text_input, 0U);
-    text_input_set_result_callback(
+    wifi_password_input_reset(app->text_input);
+    wifi_password_input_set_header_text(app->text_input, header);
+    wifi_password_input_set_minimum_length(app->text_input, 0U);
+    wifi_password_input_set_result_callback(
         app->text_input,
         bambu_monitor_app_text_input_done,
         app,
@@ -1067,7 +1067,7 @@ int32_t bambu_monitor_app(void* p) {
 
     app->view_dispatcher = view_dispatcher_alloc();
     app->main_view = view_alloc();
-    app->text_input = text_input_alloc();
+    app->text_input = wifi_password_input_alloc();
     app->token_file_path = furi_string_alloc_set(BAMBU_MONITOR_SD_TOKEN_PATH);
     app->printer_cache_path = furi_string_alloc_set(BAMBU_MONITOR_SD_PRINTER_CACHE_PATH);
     bambu_monitor_app_load_path_settings(app);
@@ -1096,7 +1096,7 @@ int32_t bambu_monitor_app(void* p) {
     view_dispatcher_add_view(
         app->view_dispatcher,
         BambuMonitorViewKeyboard,
-        text_input_get_view(app->text_input));
+        wifi_password_input_get_view(app->text_input));
     view_dispatcher_attach_to_gui(app->view_dispatcher, app->gui, ViewDispatcherTypeFullscreen);
     view_dispatcher_switch_to_view(app->view_dispatcher, BambuMonitorViewMain);
 
@@ -1113,7 +1113,7 @@ int32_t bambu_monitor_app(void* p) {
         view_dispatcher_free(app->view_dispatcher);
     }
     if(app->text_input) {
-        text_input_free(app->text_input);
+        wifi_password_input_free(app->text_input);
     }
     if(app->token_file_path) {
         furi_string_free(app->token_file_path);

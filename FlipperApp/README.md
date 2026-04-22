@@ -97,6 +97,8 @@ Typical flow on-device:
 6. open a printer detail page
 7. use `OK` to refresh, `Up/Down` to scroll, `Left/Right` to move between printers
 
+On the WiFi password screen, the custom keyboard includes direct symbol keys such as `*`, `_`, `-`, `.`, `@`, `!`, and `?`. Long-press `OK` on a key to enter its shifted variant, such as uppercase letters, space from `_`, or extra symbols like `+`, `:`, and `\`.
+
 ## UART Protocol
 
 Commands sent from Flipper:
@@ -104,6 +106,7 @@ Commands sent from Flipper:
 - `PING`
 - `WIFI_SCAN`
 - `WIFI_CONNECT|ssid|password`
+  The Flipper app percent-encodes reserved characters in the `ssid` and `password` fields before sending them over UART, and the ESP32 bridge decodes them before connecting.
 - `WIFI_RECONNECT`
 - `WIFI_STATUS`
 - `BAMBU_SET_TOKEN|bearer-token`

@@ -12,6 +12,12 @@
 
 typedef void (*BambuBridgeLineHandler)(BambuTransport* transport, const char* line);
 
+static void bambu_bridge_append_encoded_field(
+    char* buffer,
+    size_t buffer_size,
+    size_t* offset,
+    const char* value);
+
 static uint32_t bambu_bridge_ms_to_ticks(uint32_t ms) {
     uint32_t tick_hz = furi_kernel_get_tick_frequency();
     uint64_t ticks = ((uint64_t)ms * tick_hz + 999ULL) / 1000ULL;
@@ -37,6 +43,37 @@ static void bambu_bridge_set_response(BambuTransport* transport, const char* mes
         sizeof(transport->last_response),
         "%s",
         message ? message : "");
+}
+
+static void bambu_bridge_append_encoded_field(
+    char* buffer,
+    size_t buffer_size,
+    size_t* offset,
+    const char* value) {
+    static const char hex_digits[] = "0123456789ABCDEF";
+
+    if(!buffer || !offset || !value || *offset >= buffer_size) {
+        return;
+    }
+
+    while(*value && *offset + 1 < buffer_size) {
+        const uint8_t ch = (uint8_t)*value++;
+        const bool needs_escape = (ch == '|') || (ch == '%') || (ch == '\\') || (ch < 0x20);
+
+        if(needs_escape) {
+            if(*offset + 3 >= buffer_size) {
+                break;
+            }
+
+            buffer[(*offset)++] = '%';
+            buffer[(*offset)++] = hex_digits[(ch >> 4) & 0x0F];
+            buffer[(*offset)++] = hex_digits[ch & 0x0F];
+        } else {
+            buffer[(*offset)++] = (char)ch;
+        }
+    }
+
+    buffer[*offset] = '\0';
 }
 
 static void bambu_bridge_async_rx_callback(
@@ -542,14 +579,16 @@ static bool bambu_transport_live_wifi_connect(
     offset = (size_t)snprintf(
         transport->tx_line_buffer,
         sizeof(transport->tx_line_buffer),
-        "WIFI_CONNECT|%s|",
-        ssid);
+        "WIFI_CONNECT|");
+    bambu_bridge_append_encoded_field(
+        transport->tx_line_buffer, sizeof(transport->tx_line_buffer), &offset, ssid);
+    if(offset + 1 < sizeof(transport->tx_line_buffer)) {
+        transport->tx_line_buffer[offset++] = '|';
+        transport->tx_line_buffer[offset] = '\0';
+    }
     if(password && password[0] && offset < sizeof(transport->tx_line_buffer)) {
-        snprintf(
-            transport->tx_line_buffer + offset,
-            sizeof(transport->tx_line_buffer) - offset,
-            "%s",
-            password);
+        bambu_bridge_append_encoded_field(
+            transport->tx_line_buffer, sizeof(transport->tx_line_buffer), &offset, password);
     }
 
     bambu_bridge_set_response(transport, "");
